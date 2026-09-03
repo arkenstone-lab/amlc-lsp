@@ -5,9 +5,9 @@ schema_version = 1
 authors = ["AMLC LSP Contributors"]
 description = "AML and Octra AppliedML support through amlc-lsp."
 # This is a development extension. Zed grammars require a Git repository and
-# revision; replace both development URLs only when a canonical public home is
-# created for the extension and grammar.
-repository = "https://github.com/chris-in-the-shell/amlc-lsp-dev"
+# an immutable revision. Keep the pin on a preceding commit when updating this
+# file, because a commit cannot reference its own object ID.
+repository = "https://github.com/arkenstone-lab/amlc-lsp"
 
 [language_servers.amlc-lsp]
 name = "AMLC Language Server"
@@ -17,5 +17,5 @@ language = "AML"
 AML = "aml"
 
 [grammars.aml]
-repository = "https://github.com/chris-in-the-shell/amlc-lsp-dev"
-commit = "4336687d525656363944cd288d374996af39a61e"
+repository = "https://github.com/arkenstone-lab/amlc-lsp"
+commit = "b8d0add3fd8f828860803c82a8d74891febf2997"

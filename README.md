@@ -25,6 +25,8 @@ opam install amlc-lsp
 `amlc check file.aml --diagnostics=json`: one JSON diagnostic per stdout line,
 with `message`, `severity`, and `start`/`end` positions. The server reports an
 explicit diagnostic rather than guessing from human-readable compiler output.
+The server still starts when the executable is absent, but reports that
+compiler-backed AML diagnostics are unavailable.
 
 For offline AppliedML contract diagnostics, also provide `rehovot-check` on
 `PATH` or set `REHOVOT_CHECK=/absolute/path/to/rehovot-check`. The OPAM package
@@ -64,7 +66,7 @@ uses Tree-sitter for syntax highlighting and starts `amlc-lsp`.
 Zed compiles a *development* extension locally. For that workflow, Cargo must
 provide the `wasm32-wasip2` target (for example,
 `rustup target add wasm32-wasip2`). This is not a runtime requirement for a
-published extension.
+published extension; an extension-registry release is not published yet.
 
 ## Supported features
 

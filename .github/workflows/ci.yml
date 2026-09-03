@@ -26,8 +26,12 @@ jobs:
         run: |
           if [ "$RUNNER_OS" = Linux ]; then sudo apt-get update && sudo apt-get install -y neovim; fi
           if [ "$RUNNER_OS" = macOS ]; then brew install neovim; fi
-      - name: Install dependencies
-        run: opam install . --deps-only --with-test -y
+      - name: Validate package metadata
+        run: |
+          opam lint amlc-lsp.opam
+          sh scripts/check-versions
+      - name: Install package
+        run: opam install . --with-test -y
       - name: Build and test
         run: opam exec -- dune runtest
 

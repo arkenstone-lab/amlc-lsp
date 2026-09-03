@@ -1,0 +1,26 @@
+#!/usr/bin/env sh
+set -eu
+
+root_version=$(sed -n 's/^(version \(.*\))$/\1/p' dune-project)
+opam_version=$(sed -n 's/^version: "\(.*\)"$/\1/p' amlc-lsp.opam)
+grammar_version=$(sed -n 's/^  "version": "\(.*\)",$/\1/p' package.json | head -1)
+zed_extension_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' zed/extension.toml)
+zed_crate_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' zed/Cargo.toml | head -1)
+nix_version=$(awk '
+  /amlcLsp =/ { in_lsp = 1 }
+  in_lsp && /^[[:space:]]*version = / {
+    match($0, /"[^"]+"/)
+    print substr($0, RSTART + 1, RLENGTH - 2)
+    exit
+  }
+' flake.nix)
+
+test -n "$root_version"
+for candidate in "$opam_version" "$grammar_version" "$zed_extension_version" "$zed_crate_version" "$nix_version"; do
+  test "$candidate" = "$root_version" || {
+    printf 'version mismatch: expected %s, found %s\n' "$root_version" "$candidate" >&2
+    exit 1
+  }
+done
+
+printf 'version %s is consistent across release manifests\n' "$root_version"
