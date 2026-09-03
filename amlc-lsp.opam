@@ -5,6 +5,9 @@ description: "Compiler-backed diagnostics and editor assistance for AML and Octr
 maintainer: "AMLC LSP Contributors"
 authors: ["AMLC LSP Contributors"]
 license: "BSD-3-Clause"
+homepage: "https://github.com/arkenstone-lab/amlc-lsp"
+bug-reports: "https://github.com/arkenstone-lab/amlc-lsp/issues"
+dev-repo: "git+https://github.com/arkenstone-lab/amlc-lsp.git"
 depends: [
   "ocaml" {>= "4.14"}
   "dune" {>= "3.16"}
