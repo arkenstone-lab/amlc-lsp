@@ -47,8 +47,8 @@ local result = assert(completion[client_id] and completion[client_id].result, "m
 local contract = vim.tbl_filter(function(item) return item.label == "contract" end, result.items)[1]
 assert(contract, "keyword completion did not include contract")
 
-local function request(method, params)
-  local responses = vim.lsp.buf_request_sync(0, method, params, 5000)
+local function request(method, params, timeout)
+  local responses = vim.lsp.buf_request_sync(0, method, params, timeout or 5000)
   local response = assert(responses[client_id], "missing " .. method .. " response")
   assert(not response.err, method .. " was rejected by the JSON-RPC dispatcher")
   return response.result
@@ -87,8 +87,10 @@ vim.lsp.buf_attach_client(0, client_id)
 local valid_document = { uri = vim.uri_from_bufnr(0) }
 local valid_symbols
 assert(vim.wait(6000, function()
-  valid_symbols = request("textDocument/documentSymbol", { textDocument = valid_document })
-  return #valid_symbols > 0
+  local responses = vim.lsp.buf_request_sync(0, "textDocument/documentSymbol", { textDocument = valid_document }, 500)
+  local response = responses[client_id]
+  valid_symbols = response and response.result or {}
+  return not (response and response.err) and #valid_symbols > 0
 end, 50), "timed out waiting for compiler symbols on valid AML")
 
 local definition = request("textDocument/definition", { textDocument = valid_document, position = { line = 2, character = 7 } })
@@ -117,8 +119,10 @@ vim.lsp.buf_attach_client(0, client_id)
 local applied_document = { uri = vim.uri_from_bufnr(0) }
 local applied_symbols
 assert(vim.wait(6000, function()
-  applied_symbols = request("textDocument/documentSymbol", { textDocument = applied_document })
-  return #applied_symbols > 0
+  local responses = vim.lsp.buf_request_sync(0, "textDocument/documentSymbol", { textDocument = applied_document }, 500)
+  local response = responses[client_id]
+  applied_symbols = response and response.result or {}
+  return not (response and response.err) and #applied_symbols > 0
 end, 50), "timed out waiting for compiler symbols on valid AppliedML")
 local applied_definition = request("textDocument/definition", { textDocument = applied_document, position = { line = 4, character = 17 } })
 assert(#applied_definition > 0, "compiler-backed AppliedML definition returned no declaration")

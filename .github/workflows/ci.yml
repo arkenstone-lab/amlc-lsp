@@ -22,10 +22,6 @@ jobs:
         with:
           ocaml-compiler: 4.14.2
           opam-local-packages: amlc-lsp.opam
-      - name: Install Neovim
-        run: |
-          if [ "$RUNNER_OS" = Linux ]; then sudo apt-get update && sudo apt-get install -y neovim; fi
-          if [ "$RUNNER_OS" = macOS ]; then brew install neovim; fi
       - name: Validate package metadata
         run: |
           opam lint amlc-lsp.opam
@@ -49,6 +45,8 @@ jobs:
         run: nix build .#
       - name: Run tests
         run: nix develop --command dune runtest
+      - name: Run Neovim smoke test
+        run: nix develop --command dune build @neovim-smoke
       - name: Validate Tree-sitter grammar
         run: nix develop --command sh test/tree-sitter-fixtures.sh
       - name: Validate compiler contracts

@@ -32,8 +32,15 @@ Run the OCaml tests before opening a pull request:
 dune runtest
 ```
 
-This includes protocol tests and a headless Neovim smoke test. If you modify
-the grammar, install the Tree-sitter CLI and also run:
+This runs the protocol tests without requiring an external compiler. The
+compiler-backed Neovim smoke test needs AMLC and `rehovot-check`; the Nix shell
+provides both:
+
+```sh
+nix develop --command dune build @neovim-smoke
+```
+
+If you modify the grammar, install the Tree-sitter CLI and also run:
 
 ```sh
 tree-sitter generate
