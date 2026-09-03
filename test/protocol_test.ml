@@ -69,6 +69,32 @@ let test_format_safety_boundary () =
   expect (Amlc_lsp.has_multiline_sensitive_lexeme "contract C {\n  const x = \"a\nb\"\n}")
     "multiline string was accepted by formatter boundary"
 
+let test_dialect_routing_and_completion () =
+  let legacy = "program Demo {\n  form add [] (many value: int) ->[many] int marks {} = value\n  term add(1)\n}" in
+  let applied = "contract Demo {\n  fn add(value: int): int { value }\n}" in
+  expect (Amlc_lsp.document_dialect legacy = Amlc_lsp.Legacy_amlc)
+    "legacy program was routed to AppliedML";
+  expect (Amlc_lsp.document_dialect applied = Amlc_lsp.Appliedml)
+    "AppliedML contract was routed to preview AMLC";
+  expect (List.mem "contract" (Amlc_lsp.completion_keywords_for applied))
+    "AppliedML completion omitted contract";
+  expect (List.mem "option" (Amlc_lsp.completion_keywords_for applied))
+    "AppliedML completion omitted the documented option spelling";
+  expect (not (List.mem "Option" (Amlc_lsp.completion_keywords_for applied)))
+    "AppliedML completion preferred an undocumented Option spelling";
+  expect (not (List.mem "Contract" (Amlc_lsp.completion_keywords_for applied)))
+    "AppliedML completion suggested legacy Contract spelling";
+  expect (List.mem "form" (Amlc_lsp.completion_keywords_for legacy))
+    "legacy completion omitted form";
+  expect (not (List.mem "form" (Amlc_lsp.completion_keywords_for applied)))
+    "AppliedML completion leaked legacy form";
+  begin match Amlc_lsp.canonical_declaration_diagnostics "Contract Demo {}" with
+  | [diagnostic] ->
+      expect (diagnostic.code = "REHOVOT001" && diagnostic.severity = 2)
+        "Contract compatibility spelling did not produce a style diagnostic"
+  | _ -> fail "Contract compatibility spelling was not diagnosed"
+  end
+
 let test_versioned_symbol_contract () =
   let json = Yojson.Safe.from_string
     "{\"version\":2,\"symbols\":[{\"id\":\"aml:function:Demo:add\",\"kind\":\"function\",\"name\":\"add\",\"type\":\"int\",\"signature\":\"add(value: int): int\",\"selectionRange\":{\"start\":{\"line\":2,\"column\":6,\"offset\":21},\"end\":{\"line\":2,\"column\":9,\"offset\":24}}}]}" in
@@ -221,7 +247,13 @@ let test_compiler_backed_editor_help () =
       "{\"textDocument\":{\"uri\":\"file:///tmp/help.aml\"},\"context\":{\"diagnostics\":[{\"code\":\"AMLC101\",\"range\":{\"start\":{\"line\":1,\"character\":10},\"end\":{\"line\":1,\"character\":10}}}]}}")
     |> Yojson.Safe.to_string in
   expect (Amlc_lsp.contains actions "Insert missing ')'")
-    "compiler diagnostic quick fix was not offered"
+    "compiler diagnostic quick fix was not offered";
+  let canonical_action = Amlc_lsp.request_result "textDocument/codeAction"
+    (Yojson.Safe.from_string
+      "{\"textDocument\":{\"uri\":\"file:///tmp/help.aml\"},\"context\":{\"diagnostics\":[{\"code\":\"REHOVOT001\",\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":8}}}]}}")
+    |> Yojson.Safe.to_string in
+  expect (Amlc_lsp.contains canonical_action "Use canonical 'contract'")
+    "canonical Contract quick fix was not offered"
 
 let () =
   test_initialize_capabilities ();
@@ -229,6 +261,7 @@ let () =
   test_json_lines_diagnostics ();
   test_document_limits_and_deduplication ();
   test_format_safety_boundary ();
+  test_dialect_routing_and_completion ();
   test_versioned_symbol_contract ();
   test_workspace_folder_changes ();
   test_document_symbols ();

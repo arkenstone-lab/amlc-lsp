@@ -297,14 +297,27 @@ let rehovot_command () =
   | Some command when command <> "" -> command
   | _ -> executable_in_path "rehovot-check"
 
-(* Contract files use the pinned Rehovot parser rather than the bundled preview
-   AMLC, whose older grammar reports false lexical errors for [self.field]. *)
-let is_appliedml_contract text =
+type dialect = Legacy_amlc | Appliedml
+
+let has_line_start text prefixes =
   String.split_on_char '\n' text
   |> List.exists (fun line ->
       let line = String.trim line in
-      starts_with "contract " line || starts_with "Contract " line || starts_with "Program " line
-      || starts_with "interface " line || starts_with "Interface " line)
+      List.exists (fun prefix -> starts_with prefix line) prefixes)
+
+(* [program] is accepted by both compilers.  Its body decides the route: the
+   preview language uses [form]/[term], while AppliedML uses [fn] and friends.
+   Checking legacy-only forms first prevents an old program from being sent to
+   Rehovot merely because both dialects share a declaration header. *)
+let document_dialect text =
+  if has_line_start text ["form "; "term "] then Legacy_amlc
+  else if has_line_start text ["contract "; "Contract "; "program "; "Program ";
+                               "interface "; "Interface "] then Appliedml
+  else Legacy_amlc
+
+(* Contract files use the pinned Rehovot parser rather than the bundled preview
+   AMLC, whose older grammar reports false lexical errors for [self.field]. *)
+let is_appliedml_contract text = document_dialect text = Appliedml
 
 let checker_name text = if is_appliedml_contract text then "rehovot-check" else "amlc"
 
@@ -635,6 +648,37 @@ let compiler_fallback ?(code = "AMLC000") message = {
   end_position = { line = 0; character = 0; offset = None };
 }
 
+(* Rehovot accepts capitalised declaration aliases for compatibility.  Keep
+   them valid, but make the canonical spelling discoverable without changing
+   the compiler's acceptance rules. *)
+let canonical_declaration_diagnostics text =
+  if not (is_appliedml_contract text) then [] else
+  let rec walk line offset = function
+    | [] -> []
+    | value :: rest ->
+        let first =
+          let rec skip index =
+            if index < String.length value && (value.[index] = ' ' || value.[index] = '\t')
+            then skip (index + 1) else index
+          in skip 0
+        in
+        let replacement =
+          if starts_with "Contract " (String.sub value first (String.length value - first))
+          then Some ("REHOVOT001", "Contract is a compatibility spelling; use contract", "Contract")
+          else if starts_with "Program " (String.sub value first (String.length value - first))
+          then Some ("REHOVOT002", "Program is a compatibility spelling; use program", "Program")
+          else None
+        in
+        let current = Option.to_list (Option.map (fun (code, message, word) -> {
+            message; code; severity = 2;
+            start_position = { line; character = first; offset = Some (offset + first) };
+            end_position = { line; character = first + String.length word;
+                             offset = Some (offset + first + String.length word) };
+          }) replacement) in
+        current @ walk (line + 1) (offset + String.length value + 1) rest
+  in
+  walk 0 0 (String.split_on_char '\n' text)
+
 let too_large_diagnostic text = {
   message = Printf.sprintf "document exceeds the %d byte analysis limit" max_document_bytes;
   code = "AMLC900"; severity = 2;
@@ -777,6 +821,7 @@ let diagnostics_for_text uri text =
           | Unix.Unix_error (error, _, _) ->
               [compiler_fallback ("could not run " ^ checker_name text ^ ": " ^ Unix.error_message error)]
         in
+        let diagnostics = diagnostics @ canonical_declaration_diagnostics text in
         if Hashtbl.length diagnostic_cache >= max_cached_documents then Hashtbl.reset diagnostic_cache;
         Hashtbl.replace diagnostic_cache text diagnostics;
         diagnostics
@@ -1041,19 +1086,32 @@ let compiler_occurrence_at document line character =
                   then Some (symbol, role, start_position, end_position)
                   else None) symbol.occurrences) symbols))
 
-let completion_keywords = [
+let legacy_completion_keywords = [
   "program"; "term"; "form"; "let"; "in"; "if"; "then"; "else";
   "case"; "of"; "use"; "split"; "fold"; "every"; "any"; "count";
   "total"; "true"; "false"; "unit"; "int"; "bool"; "bytes"; "vec";
-  "contract"; "Contract"; "Program"; "state"; "event"; "constructor";
+]
+
+(* AppliedML spellings documented by Octra's current examples and cheatsheet.
+   The compiler accepts additional compatibility aliases; those remain valid,
+   but are not presented as the default completion path. *)
+let appliedml_completion_keywords = [
+  "program"; "contract"; "state"; "event"; "constructor";
   "fn"; "view"; "pure"; "private"; "public"; "internal"; "payable";
   "const"; "return"; "assert"; "require"; "emit"; "while"; "for";
   "self"; "caller"; "origin"; "epoch"; "epoch_time"; "value"; "balance";
   "invariant"; "struct"; "enum"; "match"; "interface"; "implements";
-  "import"; "error"; "revert"; "where"; "Option"; "None"; "Some";
-  "none"; "some"; "unwrap"; "is_some"; "self_addr"; "tree_hash";
+  "import"; "error"; "revert"; "where"; "option";
+  "unwrap"; "is_some"; "self_addr"; "tree_hash";
   "node_id"; "tx_hash"; "nonreentrant"; "log"; "indexed";
 ]
+
+let completion_keywords = legacy_completion_keywords @ appliedml_completion_keywords
+
+let completion_keywords_for text =
+  match document_dialect text with
+  | Legacy_amlc -> legacy_completion_keywords
+  | Appliedml -> appliedml_completion_keywords
 
 (* Snapshot of the type alternatives in Octra node's Rehovot parse_type.
    Legacy [unit] and [vec] remain below solely for preview AMLC documents. *)
@@ -1748,6 +1806,8 @@ let code_actions uri params =
                     | "REHOVOT103" -> [ action "Insert missing ')'" ")" ]
                     | "REHOVOT104" -> [ action "Insert missing ']'" "]" ]
                     | "REHOVOT105" -> [ action "Insert missing ','" "," ]
+                    | "REHOVOT001" -> [ action "Use canonical 'contract'" "contract" ]
+                    | "REHOVOT002" -> [ action "Use canonical 'program'" "program" ]
                     | _ -> []
                   in
                   `List actions
@@ -1809,9 +1869,13 @@ let request_result method_name params =
           Option.value ~default:[] (Hashtbl.find_opt symbol_cache document.text)) document)
         |> List.map symbol_completion_item
       in
+      let keywords = match document with
+        | None -> legacy_completion_keywords
+        | Some (_uri, document) -> completion_keywords_for document.text
+      in
       `Assoc [
         ("isIncomplete", `Bool false);
-        ("items", `List (List.map completion_item completion_keywords @ compiler_items));
+        ("items", `List (List.map completion_item keywords @ compiler_items));
       ]
   | "textDocument/documentSymbol", Some (_uri, document) ->
       `List (Option.value ~default:[] (Hashtbl.find_opt symbol_cache document.text)

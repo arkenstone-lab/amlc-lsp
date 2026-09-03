@@ -44,8 +44,8 @@ local completion = vim.lsp.buf_request_sync(0, "textDocument/completion", {
   position = { line = 1, character = 2 },
 }, 5000)
 local result = assert(completion[client_id] and completion[client_id].result, "missing completion result")
-local contract = vim.tbl_filter(function(item) return item.label == "contract" end, result.items)[1]
-assert(contract, "keyword completion did not include contract")
+local form = vim.tbl_filter(function(item) return item.label == "form" end, result.items)[1]
+assert(form, "legacy AMLC completion did not include form")
 
 local function request(method, params, timeout)
   local responses = vim.lsp.buf_request_sync(0, method, params, timeout or 5000)
