@@ -299,6 +299,73 @@ let rehovot_command () =
 
 type dialect = Legacy_amlc | Appliedml
 
+let dialect_override : dialect option ref = ref None
+
+let dialect_of_string = function
+  | "legacy" | "legacy-amlc" -> Some Legacy_amlc
+  | "appliedml" | "applied" -> Some Appliedml
+  | "auto" -> None
+  | _ -> None
+
+let set_dialect_override value =
+  dialect_override := value;
+  Hashtbl.reset diagnostic_cache;
+  Hashtbl.reset symbol_cache;
+  Hashtbl.reset semantic_token_cache
+
+(* Keep byte offsets intact while hiding comments and strings from the small
+   declaration-level heuristics below.  This is deliberately not a second
+   parser: the compiler remains authoritative, while editor routing and style
+   hints must not mistake prose for source. *)
+let source_code_mask text =
+  let length = String.length text in
+  let masked = Bytes.make length ' ' in
+  let preserve_newline index =
+    if text.[index] = '\n' then Bytes.set masked index '\n'
+  in
+  let rec normal index =
+    if index >= length then ()
+    else if text.[index] = '/' && index + 1 < length && text.[index + 1] = '/'
+    then line_comment (index + 2)
+    else if text.[index] = '/' && index + 1 < length && text.[index + 1] = '*'
+    then block_comment (index + 2)
+    else if text.[index] = '"' then string_literal (index + 1)
+    else begin
+      Bytes.set masked index text.[index];
+      normal (index + 1)
+    end
+  and line_comment index =
+    if index >= length then ()
+    else if text.[index] = '\n' then begin
+      preserve_newline index;
+      normal (index + 1)
+    end else line_comment (index + 1)
+  and block_comment index =
+    if index >= length then ()
+    else if text.[index] = '*' && index + 1 < length && text.[index + 1] = '/'
+    then normal (index + 2)
+    else begin
+      preserve_newline index;
+      block_comment (index + 1)
+    end
+  and string_literal index =
+    if index >= length then ()
+    else if text.[index] = '\\' then escaped_character (index + 1)
+    else if text.[index] = '"' then normal (index + 1)
+    else begin
+      preserve_newline index;
+      string_literal (index + 1)
+    end
+  and escaped_character index =
+    if index >= length then ()
+    else begin
+      preserve_newline index;
+      string_literal (index + 1)
+    end
+  in
+  normal 0;
+  Bytes.unsafe_to_string masked
+
 let has_line_start text prefixes =
   String.split_on_char '\n' text
   |> List.exists (fun line ->
@@ -310,10 +377,14 @@ let has_line_start text prefixes =
    Checking legacy-only forms first prevents an old program from being sent to
    Rehovot merely because both dialects share a declaration header. *)
 let document_dialect text =
-  if has_line_start text ["form "; "term "] then Legacy_amlc
-  else if has_line_start text ["contract "; "Contract "; "program "; "Program ";
-                               "interface "; "Interface "] then Appliedml
-  else Legacy_amlc
+  match !dialect_override with
+  | Some dialect -> dialect
+  | None ->
+      let code = source_code_mask text in
+      if has_line_start code ["form "; "term "] then Legacy_amlc
+      else if has_line_start code ["contract "; "Contract "; "program "; "Program ";
+                                   "interface "; "Interface "] then Appliedml
+      else Legacy_amlc
 
 (* Contract files use the pinned Rehovot parser rather than the bundled preview
    AMLC, whose older grammar reports false lexical errors for [self.field]. *)
@@ -653,6 +724,7 @@ let compiler_fallback ?(code = "AMLC000") message = {
    the compiler's acceptance rules. *)
 let canonical_declaration_diagnostics text =
   if not (is_appliedml_contract text) then [] else
+  let code = source_code_mask text in
   let rec walk line offset = function
     | [] -> []
     | value :: rest ->
@@ -677,7 +749,7 @@ let canonical_declaration_diagnostics text =
           }) replacement) in
         current @ walk (line + 1) (offset + String.length value + 1) rest
   in
-  walk 0 0 (String.split_on_char '\n' text)
+  walk 0 0 (String.split_on_char '\n' code)
 
 let too_large_diagnostic text = {
   message = Printf.sprintf "document exceeds the %d byte analysis limit" max_document_bytes;
@@ -2046,6 +2118,16 @@ let handle_notification output method_name params =
         end
     | None -> Jsonrpc.log ("ignored malformed " ^ method_name ^ " notification")
   in
+  let apply_dialect_settings settings =
+    let configured =
+      match string_member "dialect" settings with
+      | Some value -> Some value
+      | None -> Option.bind (object_member "amlcLsp" settings) (string_member "dialect")
+    in
+    Option.iter (fun value ->
+        set_dialect_override (dialect_of_string (String.lowercase_ascii value));
+        Hashtbl.iter (fun uri document -> schedule_diagnostics uri document) documents) configured
+  in
   match method_name with
   | "textDocument/didOpen" -> open_document (document_from_params params)
   | "textDocument/didChange" -> change_document (changed_document params)
@@ -2065,6 +2147,8 @@ let handle_notification output method_name params =
           publish output uri []
       | None -> Jsonrpc.log "ignored malformed textDocument/didClose notification")
   | "workspace/didChangeWorkspaceFolders" -> apply_workspace_folder_change params
+  | "workspace/didChangeConfiguration" ->
+      Option.iter apply_dialect_settings (object_member "settings" params)
   | "exit" -> raise Exit
   | _ -> ()
 
@@ -2075,6 +2159,10 @@ let handle_message output message =
   match (method_name, id) with
   | Some "initialize", id when id <> `Null && not !initialized ->
       workspace_roots := workspace_roots_from_params params;
+      Option.iter (fun options ->
+          Option.iter (fun value -> set_dialect_override (dialect_of_string (String.lowercase_ascii value)))
+            (string_member "dialect" options))
+        (object_member "initializationOptions" params);
       initialized := true;
       Jsonrpc.write output (response id initialize_result)
   | Some "initialize", id when id <> `Null -> Jsonrpc.write output (error_response id (-32600) "server already initialized")

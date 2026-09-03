@@ -1,0 +1,4 @@
+program Demo {
+  form add [] (many value: int) ->[many] int marks {} = value
+  term add(1)
+}

@@ -1,8 +1,8 @@
 /// <reference types="tree-sitter-cli/dsl" />
 
-// AML and AppliedML share the .aml extension.  This grammar deliberately
-// covers their common editor surface (declarations, types, expressions and
-// blocks) rather than duplicating either compiler's semantic validation.
+// AML and AppliedML share the .aml extension. This grammar accepts documented
+// AppliedML spellings plus compiler compatibility aliases; dialect-specific
+// completion, diagnostics, and canonicalisation remain the LSP's job.
 module.exports = grammar({
   name: "aml",
 
@@ -22,6 +22,8 @@ module.exports = grammar({
       $.state_declaration,
       $.event_declaration,
       $.function_declaration,
+      $.legacy_form_declaration,
+      $.legacy_term_declaration,
       $.constructor_declaration,
       $.constant_declaration,
       $.invariant_declaration,
@@ -73,6 +75,17 @@ module.exports = grammar({
       optional(seq(":", field("return_type", $.type))),
       choice(field("body", $.block), ";"),
     ),
+
+    // Preview AMLC declarations remain parseable for editor recovery. Their
+    // compiler routing is selected by amlc-lsp, not by this shared grammar.
+    legacy_form_declaration: $ => seq(
+      "form", field("name", $.identifier), "[", "]",
+      field("parameters", $.legacy_parameters), "->", "[", optional($.identifier), "]",
+      field("return_type", $.type), "marks", $.block, "=", $.expression,
+    ),
+    legacy_term_declaration: $ => seq("term", $.expression),
+    legacy_parameters: $ => seq("(", commaSep($.legacy_parameter), ")"),
+    legacy_parameter: $ => seq(optional(choice("many", "once")), field("name", $.identifier), ":", field("type", $.type)),
 
     constructor_declaration: $ => seq("constructor", field("parameters", $.parameters), field("body", $.block)),
     parameters: $ => seq("(", commaSep($.parameter), ")"),

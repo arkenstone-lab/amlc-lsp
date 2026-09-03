@@ -42,6 +42,16 @@ PREFIX="$HOME/.local" sh scripts/build-rehovot-check
 Nix remains available as an optional reproducible development environment; it
 is not required for installation or editor use.
 
+### Dialect routing
+
+By default the server detects legacy AMLC from `form`/`term` declarations and
+routes contracts, current `program` files, and interfaces to AppliedML's
+offline checker. Comments and strings do not affect that choice. For an
+ambiguous file or a workspace that deliberately uses one dialect, set the
+server dialect to `legacy`, `appliedml`, or `auto` (the default). Clients may
+send it as `initializationOptions.dialect` or in
+`workspace/didChangeConfiguration` as `settings.amlcLsp.dialect`.
+
 ## Editor support
 
 ### Neovim 0.11+
@@ -50,6 +60,7 @@ is not required for installation or editor use.
 vim.filetype.add({ extension = { aml = "aml" } })
 vim.lsp.config("amlc_lsp", {
   cmd = { "amlc-lsp" },
+  init_options = { dialect = "auto" }, -- or "legacy" / "appliedml"
   filetypes = { "aml" },
   root_markers = { "project.amlp", ".git" },
   single_file_support = true,

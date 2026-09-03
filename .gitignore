@@ -7,5 +7,6 @@ _build/
 zed/target/
 zed/extension.wasm
 zed/grammars/
+test/fixtures/.amlc-lsp-*.aml
 .direnv/
 result

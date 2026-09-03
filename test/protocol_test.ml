@@ -72,6 +72,7 @@ let test_format_safety_boundary () =
 let test_dialect_routing_and_completion () =
   let legacy = "program Demo {\n  form add [] (many value: int) ->[many] int marks {} = value\n  term add(1)\n}" in
   let applied = "contract Demo {\n  fn add(value: int): int { value }\n}" in
+  Amlc_lsp.set_dialect_override None;
   expect (Amlc_lsp.document_dialect legacy = Amlc_lsp.Legacy_amlc)
     "legacy program was routed to AppliedML";
   expect (Amlc_lsp.document_dialect applied = Amlc_lsp.Appliedml)
@@ -93,7 +94,23 @@ let test_dialect_routing_and_completion () =
       expect (diagnostic.code = "REHOVOT001" && diagnostic.severity = 2)
         "Contract compatibility spelling did not produce a style diagnostic"
   | _ -> fail "Contract compatibility spelling was not diagnosed"
-  end
+  end;
+  expect (Amlc_lsp.document_dialect "// form obsolete\ncontract Demo {}" = Amlc_lsp.Appliedml)
+    "commented legacy declaration changed dialect routing";
+  expect ((Amlc_lsp.canonical_declaration_diagnostics
+            "contract Real {}\n// Contract Demo {}\nconst label = \"Program Demo {}\"") = [])
+    "comments or strings produced canonicalisation diagnostics";
+  expect ((Amlc_lsp.canonical_declaration_diagnostics
+            "contract Real {}\n/*\nProgram Demo {}\n*/") = [])
+    "block comment produced a canonicalisation diagnostic";
+  expect (Amlc_lsp.dialect_of_string "legacy" = Some Amlc_lsp.Legacy_amlc)
+    "legacy dialect setting was not recognised";
+  expect (Amlc_lsp.dialect_of_string "appliedml" = Some Amlc_lsp.Appliedml)
+    "AppliedML dialect setting was not recognised";
+  Amlc_lsp.set_dialect_override (Some Amlc_lsp.Appliedml);
+  expect (Amlc_lsp.document_dialect legacy = Amlc_lsp.Appliedml)
+    "explicit dialect setting did not override automatic routing";
+  Amlc_lsp.set_dialect_override None
 
 let test_versioned_symbol_contract () =
   let json = Yojson.Safe.from_string
