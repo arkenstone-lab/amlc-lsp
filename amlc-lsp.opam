@@ -1,0 +1,18 @@
+opam-version: "2.0"
+version: "0.1.0"
+synopsis: "Language Server Protocol implementation for AML and AppliedML"
+description: "Compiler-backed diagnostics and editor assistance for AML and Octra AppliedML."
+maintainer: "AMLC LSP Contributors"
+authors: ["AMLC LSP Contributors"]
+license: "BSD-3-Clause"
+depends: [
+  "ocaml" {>= "4.14"}
+  "dune" {>= "3.16"}
+  "yojson"
+]
+build: [
+  ["dune" "build" "-p" name "-j" jobs]
+]
+post-messages: [
+  "amlc-lsp is installed. For compiler-backed AML diagnostics, provide a compatible amlc executable on PATH (or set AMLC). For AppliedML diagnostics, provide rehovot-check on PATH (or set REHOVOT_CHECK)."
+]

@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  native-opam:
+    name: Native opam build and test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: 4.14.2
+          opam-local-packages: amlc-lsp.opam
+      - name: Install Neovim
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then sudo apt-get update && sudo apt-get install -y neovim; fi
+          if [ "$RUNNER_OS" = macOS ]; then brew install neovim; fi
+      - name: Install dependencies
+        run: opam install . --deps-only --with-test -y
+      - name: Build and test
+        run: opam exec -- dune runtest
+
+  nix:
+    name: Reproducible Nix build and test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v17
+      - name: Build package
+        run: nix build .#
+      - name: Run tests
+        run: nix develop --command dune runtest
+      - name: Validate Tree-sitter grammar
+        run: nix develop --command sh test/tree-sitter-fixtures.sh
+      - name: Validate compiler contracts
+        run: nix develop --command sh test/compiler-contract.sh

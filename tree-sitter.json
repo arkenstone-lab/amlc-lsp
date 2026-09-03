@@ -1,0 +1,27 @@
+{
+  "grammars": [
+    {
+      "name": "aml",
+      "camelcase": "AML",
+      "scope": "source.aml",
+      "file-types": ["aml"],
+      "injection-regex": "^aml$",
+      "class-name": "TreeSitterAml"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "BSD-3-Clause",
+    "description": "Tree-sitter grammar for AML and Octra AppliedML",
+    "authors": [{ "name": "AMLC LSP Contributors" }]
+  },
+  "bindings": {
+    "c": true,
+    "go": false,
+    "rust": false,
+    "node": false,
+    "python": false,
+    "swift": false,
+    "zig": false
+  }
+}

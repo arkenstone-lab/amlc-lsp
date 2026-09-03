@@ -1,0 +1,11 @@
+_build/
+# Generated opam files are normally ignored.  The root package definition is
+# deliberately versioned for the non-Nix source-install path.
+*.opam
+!amlc-lsp.opam
+*.install
+zed/target/
+zed/extension.wasm
+zed/grammars/
+.direnv/
+result

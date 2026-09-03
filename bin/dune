@@ -1,0 +1,4 @@
+(executable
+ (name amlc_lsp)
+ (public_name amlc-lsp)
+ (libraries amlc_lsp))

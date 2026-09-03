@@ -1,0 +1,100 @@
+diff --git a/lib/command/aml_cli.ml b/lib/command/aml_cli.ml
+index b3f4b09..f32406f 100644
+--- a/lib/command/aml_cli.ml
++++ b/lib/command/aml_cli.ml
+@@ -2,6 +2,7 @@
+ (* Copyright (c) 2023-2026 Octra Labs <dev@octra.org> *)
+ 
+ module Parse = Octra_vm.C_parse
++module Lex = Octra_vm.C_lex
+ module Emit = Octra_vm.C_emit
+ module Feed = Octra_vm.C_feed
+ module Octb = Octra_vm.C_octb
+@@ -305,6 +306,27 @@ let metadata_names marker raw =
+   in
+   scan 0 []
+ 
++(* The parser confirms which top-level declarations exist.  The same compiler
++   lexer supplies their exact source spans, so editor navigation never relies
++   on a separate text search. *)
++let selection_span raw kind name =
++  match Lex.scan raw with
++  | Error _ -> None
++  | Ok items ->
++      let rec find index =
++        if index + 1 >= Array.length items then None
++        else
++          match items.(index).Lex.tok, items.(index + 1).Lex.tok with
++          | Lex.Program, Lex.Ident found when String.equal kind "program"
++                                                && String.equal name found ->
++              Some items.(index + 1).Lex.span
++          | Lex.Form, Lex.Ident found when String.equal kind "form"
++                                             && String.equal name found ->
++              Some items.(index + 1).Lex.span
++          | _ -> find (index + 1)
++      in
++      find 0
++
+ let module_info_of_source command raw =
+   match metadata_parse raw with
+   | Error error -> fail command (Parse.text error)
+@@ -325,13 +346,16 @@ let module_info_of_source command raw =
+   | Ok parsed ->
+       let forms = Parse.forms parsed in
+       let parsed_forms = List.map (fun fn ->
+           "form", Octra_vm.C_syn.name_text fn.Octra_vm.C_fun.name,
+-            type_text fn.arr.out) forms in
++            type_text fn.arr.out, selection_span raw "form"
++              (Octra_vm.C_syn.name_text fn.Octra_vm.C_fun.name)) forms in
+       let form_symbols = if parsed_forms = [] then
+-          List.map (fun name -> "form", name, "unknown") (metadata_names "form " raw)
++          List.map (fun name -> "form", name, "unknown", selection_span raw "form" name)
++            (metadata_names "form " raw)
+         else parsed_forms in
++      let program_name = Octra_vm.C_syn.name_text (Parse.name parsed) in
+       let symbols =
+-        ("program", Octra_vm.C_syn.name_text (Parse.name parsed), "program")
++        ("program", program_name, "program", selection_span raw "program" program_name)
+         :: form_symbols
+       in
+       let imports =
+@@ -347,14 +371,34 @@ let symbols_of_source command raw =
+   let symbols, _, _ = module_info_of_source command raw in
+   symbols
+ 
+ let emit_symbols symbols =
+-  let emit separator (kind, name, typ) =
+-    Printf.printf "%s{\"kind\":\"%s\",\"name\":\"%s\",\"type\":\"%s\"}"
+-      separator kind (json_escape name) (json_escape typ)
++  let program =
++    match symbols with
++    | ("program", name, _, _) :: _ -> name
++    | _ -> "unknown"
++  in
++  let emit_position position =
++    Printf.printf "{\"line\":%d,\"column\":%d,\"offset\":%d}"
++      position.Lex.line position.Lex.col position.Lex.off
++  in
++  let emit separator (kind, name, typ, selection) =
++    Printf.printf "%s{\"id\":\"aml:%s:%s:%s\",\"kind\":\"%s\",\"name\":\"%s\",\"type\":\"%s\""
++      separator (json_escape program) (json_escape kind) (json_escape name)
++      (json_escape kind) (json_escape name) (json_escape typ);
++    begin match selection with
++    | None -> ()
++    | Some span ->
++        Printf.printf ",\"selectionRange\":{\"start\":";
++        emit_position span.Lex.first;
++        Printf.printf ",\"end\":";
++        emit_position span.Lex.last;
++        Printf.printf "}"
++    end;
++    Printf.printf "}"
+   in
+-  Printf.printf "[";
++  Printf.printf "{\"version\":2,\"symbols\":[";
+   List.iteri (fun index symbol -> emit (if index = 0 then "" else ",") symbol) symbols;
+-  Printf.printf "]"
++  Printf.printf "]}"
+ 
+ let symbols_json path =
+   emit_symbols (symbols_of_source "check" (source path));

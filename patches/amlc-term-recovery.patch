@@ -1,0 +1,2496 @@
+diff --git a/lib/aml/analysis/c_check.ml b/lib/aml/analysis/c_check.ml
+index 3a79816..8dff480 100644
+--- a/lib/aml/analysis/c_check.ml
++++ b/lib/aml/analysis/c_check.ml
+@@ -2,6 +2,7 @@
+ (* Copyright (c) 2023-2026 Octra Labs <dev@octra.org> *)
+
+ type error =
++  | Recovery
+   | Unknown of C_term.id
+   | Used of C_term.id
+   | Ghost of C_term.id
+@@ -127,7 +128,7 @@ let shape term =
+         let next = depth + 1 in
+         let rest =
+           match term with
+-          | C_term.Unit | C_term.Bool _ | C_term.Int _ | C_term.Bytes _
++          | C_term.Error | C_term.Unit | C_term.Bool _ | C_term.Int _ | C_term.Bytes _
+           | C_term.Var _ -> rest
+           | C_term.Vec (_, values) -> push next values rest
+           | C_term.Let (_, value, body)
+@@ -240,6 +241,7 @@ let rec infer env term =
+
+ and infer_node env term =
+   match term with
++  | C_term.Error -> Error Recovery
+   | C_term.Unit -> Ok (leaf C_type.Unit, env)
+   | C_term.Bool _ -> Ok (leaf C_type.Bool, env)
+   | C_term.Int _ -> Ok (leaf C_type.Int, env)
+@@ -566,7 +568,7 @@ let rec binding_term id = function
+   | term ->
+     let children =
+       match term with
+-      | C_term.Unit | C_term.Bool _ | C_term.Int _ | C_term.Bytes _
++      | C_term.Error | C_term.Unit | C_term.Bool _ | C_term.Int _ | C_term.Bytes _
+       | C_term.Var _ -> []
+       | C_term.Vec (_, values) -> values
+       | C_term.Let (_, value, body)
+@@ -652,6 +654,7 @@ let ids_text ids =
+   C_text.get out
+
+ let raw = function
++  | Recovery -> "recovered source error"
+   | Unknown id -> "unknown id = " ^ C_nat.text id
+   | Used id -> "used id = " ^ C_nat.text id
+   | Ghost id -> "ghost id = " ^ C_nat.text id
+@@ -687,4 +690,4 @@ let text error = C_text.clip (raw error)
+
+ let rule_text = function
+   | Rule error -> C_text.clip (C_rule.text error)
+-  | Check error -> text error
+\ No newline at end of file
++  | Check error -> text error
+diff --git a/lib/aml/analysis/c_check.mli b/lib/aml/analysis/c_check.mli
+index 3e7448c..dd850b2 100644
+--- a/lib/aml/analysis/c_check.mli
++++ b/lib/aml/analysis/c_check.mli
+@@ -2,6 +2,7 @@
+ (* Copyright (c) 2023-2026 Octra Labs <dev@octra.org> *)
+
+ type error =
++  | Recovery
+   | Unknown of C_term.id
+   | Used of C_term.id
+   | Ghost of C_term.id
+@@ -55,4 +56,4 @@ val check_in_at :
+   C_rule.schedule -> epoch:Z.t -> C_term.bind list -> C_term.t ->
+   (selected, rule_error) result
+ val text : error -> string
+-val rule_text : rule_error -> string
+\ No newline at end of file
++val rule_text : rule_error -> string
+diff --git a/lib/aml/artifact/codec/c_pbin.ml b/lib/aml/artifact/codec/c_pbin.ml
+index 631c340..fec4eae 100644
+--- a/lib/aml/artifact/codec/c_pbin.ml
++++ b/lib/aml/artifact/codec/c_pbin.ml
+@@ -70,6 +70,7 @@ let rec vec_len env = function
+   | _ -> None
+
+ let rec term_code env = function
++  | C_term.Error -> None
+   | C_term.Unit ->
+       let* typ = C_bin.ty_code C_type.Unit in
+       Some (C_bin.Tag (Z.zero,
+@@ -465,4 +466,4 @@ let dec input =
+   let* code = C_bin.dec_code input in
+   let* value = prog_get code in
+   let* exact = enc value in
+-  if List.equal Bool.equal exact input then Some value else None
+\ No newline at end of file
++  if List.equal Bool.equal exact input then Some value else None
+diff --git a/lib/aml/artifact/project/c_feed.ml b/lib/aml/artifact/project/c_feed.ml
+index fda3832..2c42ab9 100644
+--- a/lib/aml/artifact/project/c_feed.ml
++++ b/lib/aml/artifact/project/c_feed.ml
+@@ -368,6 +368,7 @@ let rec sub_get id = function
+   | _ :: rest -> sub_get id rest
+
+ let rec subst values = function
++  | C_term.Error -> C_term.Error
+   | C_term.Unit -> C_term.Unit
+   | C_term.Bool value -> C_term.Bool value
+   | C_term.Int value -> C_term.Int value
+@@ -493,4 +494,4 @@ let text = function
+     "feed input differs id = " ^ C_nat.text id ^ " type = " ^ C_type.text typ
+   | Machine (id, typ) ->
+     "feed input is outside the machine data profile id = " ^ C_nat.text id
+-    ^ " type = " ^ C_type.text typ
+\ No newline at end of file
++    ^ " type = " ^ C_type.text typ
+diff --git a/lib/aml/core/c_term.ml b/lib/aml/core/c_term.ml
+index d6c17b8..f27e4e3 100644
+--- a/lib/aml/core/c_term.ml
++++ b/lib/aml/core/c_term.ml
+@@ -10,6 +10,7 @@ type bind = {
+ }
+
+ type t =
++  | Error
+   | Unit
+   | Bool of bool
+   | Int of Z.t
+@@ -51,4 +52,4 @@ and fold = {
+ }
+
+ let bind id mul typ = { id; mul; typ }
+-let fold item state body = { item; state; body }
+\ No newline at end of file
++let fold item state body = { item; state; body }
+diff --git a/lib/aml/core/c_term.mli b/lib/aml/core/c_term.mli
+index 50074e2..06cd220 100644
+--- a/lib/aml/core/c_term.mli
++++ b/lib/aml/core/c_term.mli
+@@ -10,6 +10,7 @@ type bind = {
+ }
+
+ type t =
++  | Error
+   | Unit
+   | Bool of bool
+   | Int of Z.t
+@@ -51,4 +52,4 @@ and fold = {
+ }
+
+ val bind : id -> C_type.mul -> C_type.t -> bind
+-val fold : bind -> bind -> t -> fold
+\ No newline at end of file
++val fold : bind -> bind -> t -> fold
+diff --git a/lib/aml/machine/c_eval.ml b/lib/aml/machine/c_eval.ml
+index 8f70463..1e0e77d 100644
+--- a/lib/aml/machine/c_eval.ml
++++ b/lib/aml/machine/c_eval.ml
+@@ -326,6 +326,7 @@ let input_value (bind : C_term.bind) caps value =
+
+ let rec eval env term =
+   match term with
++  | C_term.Error -> Error (Static C_check.Recovery)
+   | C_term.Unit -> Ok (item Unit)
+   | C_term.Bool value -> Ok (item (Bool value))
+   | C_term.Int value -> Ok (item (Int value))
+@@ -737,4 +738,4 @@ let text = function
+
+ let rule_text = function
+   | Rule error -> C_text.clip (C_rule.text error)
+-  | Run error -> text error
+\ No newline at end of file
++  | Run error -> text error
+diff --git a/lib/aml/machine/c_mach.ml b/lib/aml/machine/c_mach.ml
+index e5eea5b..35f36ee 100644
+--- a/lib/aml/machine/c_mach.ml
++++ b/lib/aml/machine/c_mach.ml
+@@ -290,6 +290,7 @@ let rec find_bind id = function
+
+ let rec build env term rest =
+   match term with
++  | C_term.Error -> None
+   | C_term.Unit -> Some (Void rest)
+   | C_term.Bool value -> Some (Push (C_emit.Bool value, rest))
+   | C_term.Int value -> Some (Push (C_emit.Int value, rest))
+@@ -379,6 +380,7 @@ let root sub = function
+
+ let rec tree term marks =
+   match term with
++  | C_term.Error -> Error Map
+   | C_term.Unit | C_term.Bool _ | C_term.Int _ | C_term.Bytes _
+   | C_term.Var _ ->
+       root [] marks
+@@ -426,6 +428,7 @@ and trees terms marks =
+     Ok (first :: rest, marks)
+
+ let rec spread at = function
++  | C_term.Error -> { at; sub = [] }
+   | C_term.Unit | C_term.Bool _ | C_term.Int _ | C_term.Bytes _
+   | C_term.Var _ -> { at; sub = [] }
+   | C_term.Vec (_, values) -> { at; sub = List.map (spread at) values }
+@@ -1115,4 +1118,4 @@ let text = function
+       "machine value is not representable type = " ^ C_type.text typ
+       ^ " value = " ^ C_eval.value_text value
+   | Replay -> "machine replay differs from checked evaluation"
+-  | Map -> "machine source position map differs from lowered term"
+\ No newline at end of file
++  | Map -> "machine source position map differs from lowered term"
+diff --git a/lib/aml/machine/c_print.ml b/lib/aml/machine/c_print.ml
+index fd31d7e..59fb917 100644
+--- a/lib/aml/machine/c_print.ml
++++ b/lib/aml/machine/c_print.ml
+@@ -20,6 +20,7 @@ let term value =
+     | Terms [value] :: rest -> walk (Term value :: rest)
+     | Terms (value :: values) :: rest ->
+       walk (Term value :: Text ", " :: Terms values :: rest)
++    | Term C_term.Error :: rest -> C_text.add out "<error>"; walk rest
+     | Term C_term.Unit :: rest -> C_text.add out "()"; walk rest
+     | Term (C_term.Bool true) :: rest -> C_text.add out "true"; walk rest
+     | Term (C_term.Bool false) :: rest -> C_text.add out "false"; walk rest
+@@ -125,4 +126,4 @@ let term value =
+       walk (Term cap :: Text ")" :: rest)
+   in
+   walk [Term value];
+-  C_text.get out
+\ No newline at end of file
++  C_text.get out
+diff --git a/lib/aml/syntax/c_parse.ml b/lib/aml/syntax/c_parse.ml
+index df3db38..73e8c0c 100644
+--- a/lib/aml/syntax/c_parse.ml
++++ b/lib/aml/syntax/c_parse.ml
+@@ -2215,6 +2215,7 @@ let lower_base (program : t) =
+
+ let rec term_order term tail =
+   match term with
++  | C_term.Error -> term :: tail
+   | C_term.Unit | C_term.Bool _ | C_term.Int _ | C_term.Bytes _
+   | C_term.Var _ -> term :: tail
+   | C_term.Vec (_, values) ->
+@@ -2409,4 +2410,4 @@ let text error =
+       in
+       C_text.clip
+         (Printf.sprintf "line = %d col = %d %s"
+-          error.span.first.line error.span.first.col detail)
+\ No newline at end of file
++          error.span.first.line error.span.first.col detail)
+diff --git a/lib/aml/analysis/c_fin.ml b/lib/aml/analysis/c_fin.ml
+index 9f9dd78..f2e0660 100644
+--- a/lib/aml/analysis/c_fin.ml
++++ b/lib/aml/analysis/c_fin.ml
+@@ -24,7 +24,7 @@ let stat term =
+       let next = depth + 1 in
+       let rest =
+         match term with
+-        | C_syn.KUnit | C_syn.KBool _ | C_syn.KInt _ | C_syn.KBytes _
++        | C_syn.Error | C_syn.KUnit | C_syn.KBool _ | C_syn.KInt _ | C_syn.KBytes _
+         | C_syn.Var _ -> rest
+         | C_syn.KVec (_, values) -> push next values rest
+         | C_syn.Let (_, value, body)
+@@ -76,7 +76,7 @@ let add_terms names terms =
+     | term :: rest ->
+       let names, rest =
+         match term with
+-        | C_syn.KUnit | C_syn.KBool _ | C_syn.KInt _ | C_syn.KBytes _ ->
++        | C_syn.Error | C_syn.KUnit | C_syn.KBool _ | C_syn.KInt _ | C_syn.KBytes _ ->
+           names, rest
+         | C_syn.KVec (_, values) -> names, push values rest
+         | C_syn.Var _ -> names, rest
+@@ -156,4 +156,4 @@ let pick used binds terms =
+   | _ -> None
+
+ let pickn count used binds terms =
+-  picks count used binds terms
+\ No newline at end of file
++  picks count used binds terms
+diff --git a/lib/aml/machine/c_low.ml b/lib/aml/machine/c_low.ml
+index 7496865..6b51628 100644
+--- a/lib/aml/machine/c_low.ml
++++ b/lib/aml/machine/c_low.ml
+@@ -131,7 +131,7 @@ let shape term =
+       let next = depth + 1 in
+       let rest =
+         match term with
+-        | C_syn.KUnit | C_syn.KBool _ | C_syn.KInt _ | C_syn.KBytes _
++        | C_syn.Error | C_syn.KUnit | C_syn.KBool _ | C_syn.KInt _ | C_syn.KBytes _
+         | C_syn.Var _ -> rest
+         | C_syn.KVec (_, values) -> push next values rest
+         | C_syn.Let (_, value, body)
+@@ -173,6 +173,7 @@ let rec list env next out = function
+     list env next (value :: out) rest
+
+ and lower env next = function
++  | C_syn.Error -> Ok (C_term.Error, next)
+   | C_syn.KUnit -> Ok (C_term.Unit, next)
+   | C_syn.KBool value -> Ok (C_term.Bool value, next)
+   | C_syn.KInt value -> Ok (C_term.Int value, next)
+@@ -349,4 +350,4 @@ let text = function
+   | Nodes (max, actual) ->
+     "term nodes max = " ^ string_of_int max ^ " actual = " ^ string_of_int actual
+   | Inputs (max, actual) ->
+-    "input count max = " ^ string_of_int max ^ " actual = " ^ string_of_int actual
+\ No newline at end of file
++    "input count max = " ^ string_of_int max ^ " actual = " ^ string_of_int actual
+diff --git a/lib/aml/syntax/c_fun.ml b/lib/aml/syntax/c_fun.ml
+index 37960d9..936afcb 100644
+--- a/lib/aml/syntax/c_fun.ml
++++ b/lib/aml/syntax/c_fun.ml
+@@ -135,6 +135,7 @@ let rec drop name = function
+ let drops names env = List.fold_left (fun env name -> drop name env) env names
+
+ let rec rename env = function
++  | C_syn.Error -> C_syn.Error
+   | C_syn.KUnit -> C_syn.KUnit
+   | C_syn.KBool value -> C_syn.KBool value
+   | C_syn.KInt value -> C_syn.KInt value
+@@ -260,7 +261,7 @@ let shape fns body =
+       let next = depth + 1 in
+       let rest =
+         match term with
+-        | C_syn.KUnit | C_syn.KBool _ | C_syn.KInt _ | C_syn.KBytes _
++        | C_syn.Error | C_syn.KUnit | C_syn.KBool _ | C_syn.KInt _ | C_syn.KBytes _
+         | C_syn.Var _ -> rest
+         | C_syn.KVec (_, values) -> push next values rest
+         | C_syn.Let (_, value, body)
+@@ -399,4 +400,4 @@ let text = function
+     ^ string_of_int actual
+   | Nodes (max, actual) ->
+     "function nodes max = " ^ string_of_int max ^ " actual = "
+-    ^ string_of_int actual
+\ No newline at end of file
++    ^ string_of_int actual
+diff --git a/lib/aml/syntax/c_parse.ml b/lib/aml/syntax/c_parse.ml
+index 73e8c0c..2c6086a 100644
+--- a/lib/aml/syntax/c_parse.ml
++++ b/lib/aml/syntax/c_parse.ml
+@@ -62,24 +62,6 @@ end
+
+ module Imap = Map.Make (Ikey)
+
+-type t = {
+-  name : C_syn.name;
+-  sizes : C_idx.env;
+-  inputs : C_decl.input list;
+-  input_spans : (string * C_lex.span) list;
+-  decls : fdecl list;
+-  fns : C_fun.fn list;
+-  form_marks : (C_syn.name * form_marks) list;
+-  body : C_fun.t;
+-  perms : C_perm.set;
+-  dtypes : (Z.t * C_data.decl) list;
+-  rtypes : (Z.t * C_rec.decl) list;
+-  veils : veil list;
+-  body_marks : C_lex.span option list;
+-  body_span : C_lex.span;
+-  span : C_lex.span;
+-}
+-
+ type cause =
+   | Lex of C_lex.error
+   | Held of C_lex.hold
+@@ -127,6 +109,25 @@ type error = {
+   span : C_lex.span;
+ }
+
++type t = {
++  name : C_syn.name;
++  sizes : C_idx.env;
++  inputs : C_decl.input list;
++  input_spans : (string * C_lex.span) list;
++  decls : fdecl list;
++  fns : C_fun.fn list;
++  form_marks : (C_syn.name * form_marks) list;
++  body : C_fun.t;
++  perms : C_perm.set;
++  dtypes : (Z.t * C_data.decl) list;
++  rtypes : (Z.t * C_rec.decl) list;
++  veils : veil list;
++  body_marks : C_lex.span option list;
++  body_span : C_lex.span;
++  syntax_errors : error list;
++  span : C_lex.span;
++}
++
+ type state = {
+   items : C_lex.item array;
+   at : int;
+@@ -143,6 +144,7 @@ type state = {
+   gen : int;
+   marks : C_lex.span option list;
+   mcount : int;
++  syntax_errors : error list;
+ }
+
+ let ( let* ) value next =
+@@ -172,7 +174,7 @@ let top_mark state =
+
+ let rec mark_term at term tail =
+   match term with
+-  | C_syn.KUnit | C_syn.KBool _ | C_syn.KInt _ | C_syn.KBytes _
++  | C_syn.Error | C_syn.KUnit | C_syn.KBool _ | C_syn.KInt _ | C_syn.KBytes _
+   | C_syn.Var _ -> at :: tail
+   | C_syn.KVec (_, values) -> mark_terms at values (at :: tail)
+   | C_syn.Let (_, value, body) | C_syn.Unpair (value, _, _, body) ->
+@@ -249,7 +251,7 @@ let rec trace_term parent term (marks, origins) =
+   let state = marks, origins in
+   let marks, origins =
+     match term with
+-    | C_syn.KUnit | C_syn.KBool _ | C_syn.KInt _ | C_syn.KBytes _
++    | C_syn.Error | C_syn.KUnit | C_syn.KBool _ | C_syn.KInt _ | C_syn.KBytes _
+     | C_syn.Var _ -> state
+     | C_syn.KVec (_, values) -> trace_terms at values state
+     | C_syn.Let (_, value, body) | C_syn.Unpair (value, _, _, body) ->
+@@ -1179,6 +1181,28 @@ let expr depth state =
+       Ok (term, replace_marks start marks state)
+   | Error error -> Error { cause = raw_cause error; span = mark }
+
++let recovery_token = function
++  | C_lex.In | C_lex.Then | C_lex.Else | C_lex.Of | C_lex.Rbrace -> true
++  | _ -> false
++
++let recover_expr start error =
++  match error.cause with
++  | Need _ ->
++  let rec seek skipped state =
++    if recovery_token (tok state) then
++      let* term, state = put ~first:(span start) state C_syn.Error in
++      Ok (term, { state with syntax_errors = error :: state.syntax_errors })
++    else if skipped >= 20 || tok state = C_lex.Eof then Error error
++    else seek (skipped + 1) (next state)
++  in
++  seek 0 start
++  | _ -> Error error
++
++let expr_recover depth state =
++  match expr depth state with
++  | Ok value -> Ok value
++  | Error error -> recover_expr state error
++
+ let rec flow depth state =
+   let* () = guard depth state in
+   match tok state with
+@@ -1187,7 +1211,7 @@ let rec flow depth state =
+   | C_lex.Use -> use_term depth state
+   | _ ->
+       let start = state.mcount in
+-      let* term, state = expr depth state in
++      let* term, state = expr_recover depth state in
+       Ok ((C_fun.Ret term, Ret_marks (marks_since start state)), state)
+
+ and flow_let depth state =
+@@ -1195,7 +1219,7 @@ and flow_let depth state =
+   let* result, state = bind (next state) in
+   let* state = take C_lex.F_eq state in
+   let value_start = state.mcount in
+-  let* value, state = expr (depth + 1) state in
++  let* value, state = expr_recover (depth + 1) state in
+   let value_marks = marks_since value_start state in
+   let* state = take C_lex.F_in state in
+   let* (body, body_marks), state = flow (depth + 1) state in
+@@ -1205,7 +1229,7 @@ and flow_let depth state =
+ and flow_if depth state =
+   let first = span state in
+   let guard_start = state.mcount in
+-  let* cond, state = expr (depth + 1) (next state) in
++  let* cond, state = expr_recover (depth + 1) (next state) in
+   let guard_marks = marks_since guard_start state in
+   let* state = take C_lex.F_then state in
+   let* (yes, yes_marks), state = flow (depth + 1) state in
+@@ -2127,6 +2151,7 @@ let parse src =
+         gen = 0;
+         marks = [];
+         mcount = 0;
++        syntax_errors = [];
+       } in
+       let start = span state in
+       let* state = take C_lex.F_program state in
+@@ -2168,6 +2193,7 @@ let parse src =
+               veils = List.rev state.veils;
+               body_marks;
+               body_span;
++              syntax_errors = List.rev state.syntax_errors;
+               span = { start with last = last.last } }
+       end
+
+@@ -2337,8 +2363,10 @@ let form_diagnostics program =
+       | Error error -> Some { cause = Fun error; span = form_error_span program fn error })
+     program.fns
+
+-let diagnostics program =
+-  match form_diagnostics program with
++let diagnostics (program : t) =
++  match program.syntax_errors with
++  | _ :: _ as errors -> errors
++  | [] -> match form_diagnostics program with
+   | _ :: _ as errors -> errors
+   | [] ->
+       begin
+diff --git a/lib/aml/syntax/c_raw.ml b/lib/aml/syntax/c_raw.ml
+index c51cb14..1263826 100644
+--- a/lib/aml/syntax/c_raw.ml
++++ b/lib/aml/syntax/c_raw.ml
+@@ -105,6 +105,7 @@ let pick_view item = item.pname, item.pbind
+ let bind_of_syn item = bind item.C_syn.name item.mul (C_decl.Exact item.typ)
+
+ let rec of_syn = function
++  | C_syn.Error -> failwith "recovery term cannot be elaborated"
+   | C_syn.KUnit -> KUnit
+   | C_syn.KBool value -> KBool value
+   | C_syn.KInt value -> KInt value
+@@ -513,4 +514,4 @@ let text = function
+       ^ string_of_int actual
+   | Nodes (limit, actual) ->
+       "raw term nodes limit = " ^ string_of_int limit ^ " actual = "
+-      ^ string_of_int actual
+\ No newline at end of file
++      ^ string_of_int actual
+diff --git a/lib/aml/syntax/c_syn.ml b/lib/aml/syntax/c_syn.ml
+index 65105f6..157e3b2 100644
+--- a/lib/aml/syntax/c_syn.ml
++++ b/lib/aml/syntax/c_syn.ml
+@@ -53,6 +53,7 @@ type bind = {
+ }
+
+ type t =
++  | Error
+   | KUnit
+   | KBool of bool
+   | KInt of Z.t
+@@ -132,7 +133,7 @@ let has name term =
+     | term :: rest ->
+       let rest =
+         match term with
+-        | KUnit | KBool _ | KInt _ | KBytes _ | Var _ -> rest
++        | Error | KUnit | KBool _ | KInt _ | KBytes _ | Var _ -> rest
+         | KVec (_, values) -> push values rest
+         | Let (_, value, body)
+         | Pair (value, body)
+@@ -156,4 +157,4 @@ let has name term =
+       in
+       walk rest
+   in
+-  walk [term]
+\ No newline at end of file
++  walk [term]
+diff --git a/lib/aml/syntax/c_syn.mli b/lib/aml/syntax/c_syn.mli
+index 2c97566..7dbbd7f 100644
+--- a/lib/aml/syntax/c_syn.mli
++++ b/lib/aml/syntax/c_syn.mli
+@@ -35,6 +35,7 @@ type bind = {
+ }
+
+ type t =
++  | Error
+   | KUnit
+   | KBool of bool
+   | KInt of Z.t
+@@ -78,4 +79,4 @@ and fold = {
+ val bind : name -> C_type.mul -> typ -> bind
+ val fold : bind -> bind -> t -> fold
+ val cmp : rel -> name -> name -> name -> t -> t -> t
+-val has : name -> t -> bool
+\ No newline at end of file
++val has : name -> t -> bool
+diff --git a/test/regression_source.ml b/test/regression_source.ml
+index 7d7ddf1..9f3b31f 100644
+--- a/test/regression_source.ml
++++ b/test/regression_source.ml
+@@ -69,6 +69,26 @@ program Position {
+ }
+ |}
+
++let term_recovery = {|
++program Recover {
++  term
++    let many value: int = true + in
++    if true then 1 else 2
++}
++|}
++
++let check_term_recovery () =
++  match Octra_vm.C_parse.parse term_recovery with
++  | Error error -> fail "term recovery" (Octra_vm.C_parse.text error)
++  | Ok parsed ->
++      let diagnostics = Octra_vm.C_parse.diagnostics parsed in
++      if List.length diagnostics <> 1 then
++        fail "term recovery" "diagnostic count differs";
++      match Octra_vm.C_parse.check parsed with
++      | Error error when includes (Octra_vm.C_parse.text error) "recovered source error" -> ()
++      | Error error -> fail "term recovery" (Octra_vm.C_parse.text error)
++      | Ok _ -> fail "term recovery" "source accepted"
++
+ let core_vec_index =
+   "program Position { term at[5](vec[int](1,2,3)) }"
+
+@@ -402,8 +422,9 @@ let run () =
+   core_refuse "finite orbit seed type" "type expected = int actual = bool"
+     finite_orbit_seed_type;
+   core_refuse "linear direct form" "function requires explicit use" linear_form;
++  check_term_recovery ();
+   core_refuse "effect direct form" "function requires explicit use" effect_form;
+   core_refuse "direct arity" "expected = 2 actual = 1" short_call;
+   core_refuse "direct type" "type expected = int actual = bool" wrong_call_type;
+   core_refuse "direct order" "unknown function = second" forward_call;
+-  core_veil "veil evidence" veil plain
+\ No newline at end of file
++  core_veil "veil evidence" veil plain
+diff --git a/lib/aml/syntax/c_parse.ml b/lib/aml/syntax/c_parse.ml
+index 2c6086a..fd15117 100644
+--- a/lib/aml/syntax/c_parse.ml
++++ b/lib/aml/syntax/c_parse.ml
+@@ -103,6 +103,7 @@ type cause =
+   | Check of C_check.error
+   | Depth of int * int
+   | Nodes of int * int
++  | Recovery_limit of int
+
+ type error = {
+   cause : cause;
+@@ -1188,14 +1189,17 @@ let recovery_token = function
+ let recover_expr start error =
+   match error.cause with
+   | Need _ ->
+-  let rec seek skipped state =
++  if List.length start.syntax_errors >= 20 then
++    Error { cause = Recovery_limit 20; span = error.span }
++  else
++  let rec seek state =
+     if recovery_token (tok state) then
+       let* term, state = put ~first:(span start) state C_syn.Error in
+       Ok (term, { state with syntax_errors = error :: state.syntax_errors })
+-    else if skipped >= 20 || tok state = C_lex.Eof then Error error
+-    else seek (skipped + 1) (next state)
++    else if tok state = C_lex.Eof then Error error
++    else seek (next state)
+   in
+-  seek 0 start
++  seek start
+   | _ -> Error error
+
+ let expr_recover depth state =
+@@ -2435,6 +2439,8 @@ let text error =
+             Printf.sprintf "syntax depth limit = %d actual = %d" limit actual
+         | Nodes (limit, actual) ->
+             Printf.sprintf "syntax nodes limit = %d actual = %d" limit actual
++        | Recovery_limit limit ->
++            Printf.sprintf "term recovery diagnostics max = %d" limit
+       in
+       C_text.clip
+         (Printf.sprintf "line = %d col = %d %s"
+diff --git a/lib/aml/syntax/c_parse.mli b/lib/aml/syntax/c_parse.mli
+index 369d2ec..ab25436 100644
+--- a/lib/aml/syntax/c_parse.mli
++++ b/lib/aml/syntax/c_parse.mli
+@@ -50,6 +50,7 @@ type cause =
+   | Check of C_check.error
+   | Depth of int * int
+   | Nodes of int * int
++  | Recovery_limit of int
+
+ type error = {
+   cause : cause;
+@@ -82,4 +83,4 @@ val compile : t -> (C_low.prog * C_check.info, error) result
+ val check : t -> (C_check.info, error) result
+ val diagnostics : t -> error list
+ val source : string -> (C_low.prog, error) result
+-val text : error -> string
+\ No newline at end of file
++val text : error -> string
+diff --git a/lib/aml/syntax/c_parse.ml b/lib/aml/syntax/c_parse.ml
+index fd15117..cf16eda 100644
+--- a/lib/aml/syntax/c_parse.ml
++++ b/lib/aml/syntax/c_parse.ml
+@@ -773,7 +773,7 @@ and if_term depth state =
+   put ~first state (C_raw.If (cond, yes, no))
+
+ and case_term depth state =
+-  let* value, state = raw_expr (depth + 1) (next state) in
++  let* value, state = raw_expr_recover (depth + 1) [C_lex.Of; C_lex.As] (next state) in
+   match tok state with
+   | C_lex.Of -> result_case depth value (next state)
+   | C_lex.As -> data_case depth value (next state)
+@@ -1170,6 +1170,19 @@ and raw_expr depth state =
+   | C_lex.Rift -> rift depth state
+   | _ -> order depth state
+
++and raw_expr_recover depth stops state =
++  match raw_expr depth state with
++  | Ok value -> Ok value
++  | Error ({ cause = Need _; _ } as error) ->
++      let rec seek state =
++        if List.mem (tok state) stops then
++          Ok (C_raw.KUnit, { state with syntax_errors = error :: state.syntax_errors })
++        else if tok state = C_lex.Eof then Error error
++        else seek (next state)
++      in
++      seek state
++  | Error error -> Error error
++
+ let expr depth state =
+   let mark = span state in
+   let start = state.mcount in
+@@ -2339,6 +2352,11 @@ let lower program =
+   | result -> result
+
+ let compile (program : t) =
++  let* () =
++    match program.syntax_errors with
++    | [] -> Ok ()
++    | error :: _ -> Error error
++  in
+   let* program_low = lower program in
+   match C_check.check_in_located program_low.inputs program_low.term with
+   | Error failure ->
+diff --git a/lib/aml/syntax/c_poly.ml b/lib/aml/syntax/c_poly.ml
+index 4f0f114..8bbb419 100644
+--- a/lib/aml/syntax/c_poly.ml
++++ b/lib/aml/syntax/c_poly.ml
+@@ -431,4 +431,4 @@ let text = function
+   | Name name -> "unknown form kind binder = " ^ name
+   | Decl error -> C_decl.text error
+   | Raw error -> C_raw.text error
+-  | Spec error -> C_spec.text error
+\ No newline at end of file
++  | Spec error -> C_spec.text error
+diff --git a/lib/aml/syntax/c_raw.mli b/lib/aml/syntax/c_raw.mli
+index 89773a3..82a0850 100644
+--- a/lib/aml/syntax/c_raw.mli
++++ b/lib/aml/syntax/c_raw.mli
+@@ -92,4 +92,4 @@ val pick_view : pick -> C_syn.name * bind
+ val of_syn : C_syn.t -> t
+ val elab_trace : C_idx.env -> t -> (C_syn.t * C_syn.t list, error) result
+ val elab : C_idx.env -> t -> (C_syn.t, error) result
+-val text : error -> string
+\ No newline at end of file
++val text : error -> string
+diff --git a/test/regression_source.ml b/test/regression_source.ml
+index 9f3b31f..b649243 100644
+--- a/test/regression_source.ml
++++ b/test/regression_source.ml
+@@ -77,6 +77,27 @@ program Recover {
+ }
+ |}
+
++let raw_term_recovery = {|
++program RecoverCase {
++  term
++    case of
++      ok many value: int => 1
++      | err many value: int => 2
++}
++|}
++
++let check_raw_term_recovery () =
++  match Octra_vm.C_parse.parse raw_term_recovery with
++  | Error error -> fail "raw term recovery" (Octra_vm.C_parse.text error)
++  | Ok parsed ->
++      let diagnostics = Octra_vm.C_parse.diagnostics parsed in
++      if List.length diagnostics <> 1 then
++        fail "raw term recovery" "diagnostic count differs";
++      match Octra_vm.C_parse.check parsed with
++      | Error error when includes (Octra_vm.C_parse.text error) "expected" -> ()
++      | Error error -> fail "raw term recovery" (Octra_vm.C_parse.text error)
++      | Ok _ -> fail "raw term recovery" "source accepted"
++
+ let check_term_recovery () =
+   match Octra_vm.C_parse.parse term_recovery with
+   | Error error -> fail "term recovery" (Octra_vm.C_parse.text error)
+@@ -85,7 +106,7 @@ let check_term_recovery () =
+       if List.length diagnostics <> 1 then
+         fail "term recovery" "diagnostic count differs";
+       match Octra_vm.C_parse.check parsed with
+-      | Error error when includes (Octra_vm.C_parse.text error) "recovered source error" -> ()
++      | Error error when includes (Octra_vm.C_parse.text error) "expected" -> ()
+       | Error error -> fail "term recovery" (Octra_vm.C_parse.text error)
+       | Ok _ -> fail "term recovery" "source accepted"
+
+@@ -423,6 +444,7 @@ let run () =
+     finite_orbit_seed_type;
+   core_refuse "linear direct form" "function requires explicit use" linear_form;
+   check_term_recovery ();
++  check_raw_term_recovery ();
+   core_refuse "effect direct form" "function requires explicit use" effect_form;
+   core_refuse "direct arity" "expected = 2 actual = 1" short_call;
+   core_refuse "direct type" "type expected = int actual = bool" wrong_call_type;
+diff --git a/lib/aml/syntax/c_parse.ml b/lib/aml/syntax/c_parse.ml
+index cf16eda..733559b 100644
+--- a/lib/aml/syntax/c_parse.ml
++++ b/lib/aml/syntax/c_parse.ml
+@@ -644,16 +644,16 @@ let input state =
+ let rec unary depth make state =
+   let first = span state in
+   let* state = take C_lex.F_lparen (next state) in
+-  let* value, state = raw_expr (depth + 1) state in
++  let* value, state = raw_expr_recover (depth + 1) [C_lex.Rparen] state in
+   let* state = take C_lex.F_rparen state in
+   put ~first state (make value)
+
+ and binary depth make state =
+   let first = span state in
+   let* state = take C_lex.F_lparen (next state) in
+-  let* left, state = raw_expr (depth + 1) state in
++  let* left, state = raw_expr_recover (depth + 1) [C_lex.Comma] state in
+   let* state = take C_lex.F_comma state in
+-  let* right, state = raw_expr (depth + 1) state in
++  let* right, state = raw_expr_recover (depth + 1) [C_lex.Rparen] state in
+   let* state = take C_lex.F_rparen state in
+   put ~first state (make left right)
+
+@@ -663,7 +663,7 @@ and typed_unary depth make state =
+   let* raw, state = typ state in
+   let* state = take C_lex.F_rbrack state in
+   let* state = take C_lex.F_lparen state in
+-  let* value, state = raw_expr (depth + 1) state in
++  let* value, state = raw_expr_recover (depth + 1) [C_lex.Rparen] state in
+   let* state = take C_lex.F_rparen state in
+   put ~first state (make raw value)
+
+@@ -673,9 +673,9 @@ and typed_binary depth make state =
+   let* raw, state = typ state in
+   let* state = take C_lex.F_rbrack state in
+   let* state = take C_lex.F_lparen state in
+-  let* left, state = raw_expr (depth + 1) state in
++  let* left, state = raw_expr_recover (depth + 1) [C_lex.Comma] state in
+   let* state = take C_lex.F_comma state in
+-  let* right, state = raw_expr (depth + 1) state in
++  let* right, state = raw_expr_recover (depth + 1) [C_lex.Rparen] state in
+   let* state = take C_lex.F_rparen state in
+   put ~first state (make raw left right)
+
+@@ -685,7 +685,7 @@ and indexed_unary depth make state =
+   let* index, state = nat state in
+   let* state = take C_lex.F_rbrack state in
+   let* state = take C_lex.F_lparen state in
+-  let* value, state = raw_expr (depth + 1) state in
++  let* value, state = raw_expr_recover (depth + 1) [C_lex.Rparen] state in
+   let* state = take C_lex.F_rparen state in
+   put ~first state (make index value)
+
+@@ -702,7 +702,7 @@ and vector depth state =
+     match tok state with
+     | C_lex.Rparen -> Ok (List.rev out, next state)
+     | _ ->
+-        let* value, state = raw_expr (depth + 1) state in
++        let* value, state = raw_expr_recover (depth + 1) [C_lex.Comma; C_lex.Rparen] state in
+         begin
+           match tok state with
+           | C_lex.Comma -> items (value :: out) (next state)
+diff --git a/test/regression_source.ml b/test/regression_source.ml
+index b649243..6a5dcb4 100644
+--- a/test/regression_source.ml
++++ b/test/regression_source.ml
+@@ -86,6 +86,8 @@ program RecoverCase {
+ }
+ |}
+
++let vector_term_recovery = "program RecoverVector { term vec[int](,) }"
++
+ let check_raw_term_recovery () =
+   match Octra_vm.C_parse.parse raw_term_recovery with
+   | Error error -> fail "raw term recovery" (Octra_vm.C_parse.text error)
+@@ -98,6 +100,17 @@ let check_raw_term_recovery () =
+       | Error error -> fail "raw term recovery" (Octra_vm.C_parse.text error)
+       | Ok _ -> fail "raw term recovery" "source accepted"
+
++let check_vector_term_recovery () =
++  match Octra_vm.C_parse.parse vector_term_recovery with
++  | Error error -> fail "vector term recovery" (Octra_vm.C_parse.text error)
++  | Ok parsed ->
++      if List.length (Octra_vm.C_parse.diagnostics parsed) <> 1 then
++        fail "vector term recovery" "diagnostic count differs";
++      match Octra_vm.C_parse.check parsed with
++      | Error error when includes (Octra_vm.C_parse.text error) "expected" -> ()
++      | Error error -> fail "vector term recovery" (Octra_vm.C_parse.text error)
++      | Ok _ -> fail "vector term recovery" "source accepted"
++
+ let check_term_recovery () =
+   match Octra_vm.C_parse.parse term_recovery with
+   | Error error -> fail "term recovery" (Octra_vm.C_parse.text error)
+@@ -445,6 +458,7 @@ let run () =
+   core_refuse "linear direct form" "function requires explicit use" linear_form;
+   check_term_recovery ();
+   check_raw_term_recovery ();
++  check_vector_term_recovery ();
+   core_refuse "effect direct form" "function requires explicit use" effect_form;
+   core_refuse "direct arity" "expected = 2 actual = 1" short_call;
+   core_refuse "direct type" "type expected = int actual = bool" wrong_call_type;
+diff --git a/lib/command/aml_cli.ml b/lib/command/aml_cli.ml
+index ddb5054..5ea31d6 100644
+--- a/lib/command/aml_cli.ml
++++ b/lib/command/aml_cli.ml
+@@ -248,6 +248,33 @@ let check_json path =
+                 exit 1
+           end
+
++let type_text typ =
++  match Octra_vm.C_low.typ typ with
++  | Ok value -> Octra_vm.C_type.text value
++  | Error _ -> "unknown"
++
++let symbols_json path =
++  let raw = source path in
++  match Parse.parse raw with
++  | Error error -> fail "check" (Parse.text error)
++  | Ok parsed ->
++      begin
++        match Parse.diagnostics parsed with
++        | error :: _ -> fail "check" (Parse.text error)
++        | [] ->
++            let forms = Parse.forms parsed in
++            let emit separator kind name typ =
++              Printf.printf "%s{\"kind\":\"%s\",\"name\":\"%s\",\"type\":\"%s\"}"
++                separator kind (json_escape name) (json_escape typ)
++            in
++            Printf.printf "[";
++            emit "" "program" (Octra_vm.C_syn.name_text (Parse.name parsed)) "program";
++            List.iter (fun fn ->
++              emit "," "form" (Octra_vm.C_syn.name_text fn.Octra_vm.C_fun.name)
++                (type_text fn.arr.out)) forms;
++            Printf.printf "]\n%!"
++      end
++
+ let build_as command input output feed_path =
+   if String.equal input output || String.equal input (output ^ ".next") then
+     fail command "source and output paths overlap";
+@@ -985,4 +1012,4 @@ let main argv =
+   | Stack_overflow -> fail "aml" "stack capacity exceeded"
+   | Out_of_memory -> fail "aml" "memory capacity exceeded"
+   | Invalid_argument reason -> fail "aml" reason
+-  | Failure reason -> fail "aml" reason
+\ No newline at end of file
++  | Failure reason -> fail "aml" reason
+diff --git a/lib/command/amlc_cli.ml b/lib/command/amlc_cli.ml
+index 37d0af6..c5eb3d2 100644
+--- a/lib/command/amlc_cli.ml
++++ b/lib/command/amlc_cli.ml
+@@ -162,6 +162,8 @@ let check path args =
+   let info = stat "check" path in
+   if info.st_kind = Unix.S_REG && aml path && args = ["--diagnostics=json"] then
+     Aml_cli.check_json path
++  else if info.st_kind = Unix.S_REG && aml path && args = ["--symbols=json"] then
++    Aml_cli.symbols_json path
+   else if info.st_kind = Unix.S_DIR || String.equal (Filename.extension path) ".amlp"
+   then
+     let req = input_args "check" input_req args in
+@@ -412,4 +414,4 @@ let main argv =
+   | Stack_overflow -> fail "amlc" "stack capacity exceeded"
+   | Out_of_memory -> fail "amlc" "memory capacity exceeded"
+   | Invalid_argument reason -> fail "amlc" reason
+-  | Failure reason -> fail "amlc" reason
+\ No newline at end of file
++  | Failure reason -> fail "amlc" reason
+diff --git a/lib/aml/artifact/project/c_proj.ml b/lib/aml/artifact/project/c_proj.ml
+index 5d72e69..618565c 100644
+--- a/lib/aml/artifact/project/c_proj.ml
++++ b/lib/aml/artifact/project/c_proj.ml
+@@ -193,6 +193,11 @@ let make ~rule ~target ~srcs ~roots =
+
+ let srcs value = value.srcs
+ let roots value = value.roots
++let src_path (value : src) = value.path
++let src_body (value : src) = value.body
++let src_deps (value : src) = value.deps
++let root_path (value : root) = value.path
++let root_name (value : root) = value.name
+ let rule value = value.rule
+ let target value = value.target
+
+@@ -229,4 +234,4 @@ let text = function
+   | Dup_root path -> "project root repeats path = " ^ path
+   | Name name -> "project output name is invalid name = " ^ name
+   | Dup_name name -> "project output name repeats name = " ^ name
+-  | Rule rule -> "project rule is unsupported id = " ^ C_rule.id_text rule
+\ No newline at end of file
++  | Rule rule -> "project rule is unsupported id = " ^ C_rule.id_text rule
+diff --git a/lib/aml/artifact/project/c_proj.mli b/lib/aml/artifact/project/c_proj.mli
+index b5ef449..dbe26d6 100644
+--- a/lib/aml/artifact/project/c_proj.mli
++++ b/lib/aml/artifact/project/c_proj.mli
+@@ -50,8 +50,13 @@ val make :
+
+ val srcs : t -> src list
+ val roots : t -> root list
++val src_path : src -> string
++val src_body : src -> string
++val src_deps : src -> string list
++val root_path : root -> string
++val root_name : root -> string
+ val rule : t -> C_rule.id
+ val target : t -> target
+ val out : target -> root -> string
+ val outs : t -> string list
+-val text : error -> string
+\ No newline at end of file
++val text : error -> string
+diff --git a/lib/command/aml_cli.ml b/lib/command/aml_cli.ml
+index 5ea31d6..3e8f25b 100644
+--- a/lib/command/aml_cli.ml
++++ b/lib/command/aml_cli.ml
+@@ -253,28 +253,34 @@ let type_text typ =
+   | Ok value -> Octra_vm.C_type.text value
+   | Error _ -> "unknown"
+
+-let symbols_json path =
+-  let raw = source path in
++let symbols_of_source command raw =
+   match Parse.parse raw with
+-  | Error error -> fail "check" (Parse.text error)
++  | Error error -> fail command (Parse.text error)
+   | Ok parsed ->
+       begin
+         match Parse.diagnostics parsed with
+-        | error :: _ -> fail "check" (Parse.text error)
++        | error :: _ -> fail command (Parse.text error)
+         | [] ->
+             let forms = Parse.forms parsed in
+-            let emit separator kind name typ =
+-              Printf.printf "%s{\"kind\":\"%s\",\"name\":\"%s\",\"type\":\"%s\"}"
+-                separator kind (json_escape name) (json_escape typ)
+-            in
+-            Printf.printf "[";
+-            emit "" "program" (Octra_vm.C_syn.name_text (Parse.name parsed)) "program";
+-            List.iter (fun fn ->
+-              emit "," "form" (Octra_vm.C_syn.name_text fn.Octra_vm.C_fun.name)
+-                (type_text fn.arr.out)) forms;
+-            Printf.printf "]\n%!"
++            ("program", Octra_vm.C_syn.name_text (Parse.name parsed), "program")
++            :: List.map (fun fn ->
++              "form", Octra_vm.C_syn.name_text fn.Octra_vm.C_fun.name,
++                type_text fn.arr.out) forms
+       end
+
++let emit_symbols symbols =
++  let emit separator (kind, name, typ) =
++    Printf.printf "%s{\"kind\":\"%s\",\"name\":\"%s\",\"type\":\"%s\"}"
++      separator kind (json_escape name) (json_escape typ)
++  in
++  Printf.printf "[";
++  List.iteri (fun index symbol -> emit (if index = 0 then "" else ",") symbol) symbols;
++  Printf.printf "]"
++
++let symbols_json path =
++  emit_symbols (symbols_of_source "check" (source path));
++  Printf.printf "\n%!"
++
+ let build_as command input output feed_path =
+   if String.equal input output || String.equal input (output ^ ".next") then
+     fail command "source and output paths overlap";
+@@ -789,6 +795,34 @@ let project_input command manifest =
+   in
+   { image; files }
+
++let project_symbols_json manifest =
++  let input = project_input "project-symbols" manifest in
++  let roots = Proj.roots input.image.project in
++  let root_names path =
++    roots
++    |> List.filter (fun root -> String.equal (Proj.root_path root) path)
++    |> List.map Proj.root_name
++  in
++  let emit_strings values =
++    Printf.printf "[";
++    List.iteri (fun index value ->
++      Printf.printf "%s\"%s\"" (if index = 0 then "" else ",") (json_escape value)) values;
++    Printf.printf "]"
++  in
++  Printf.printf "{\"version\":1,\"sources\":[";
++  Proj.srcs input.image.project
++  |> List.iteri (fun index item ->
++      let path = Proj.src_path item in
++      Printf.printf "%s{\"path\":\"%s\",\"dependencies\":"
++        (if index = 0 then "" else ",") (json_escape path);
++      emit_strings (Proj.src_deps item);
++      Printf.printf ",\"roots\":";
++      emit_strings (root_names path);
++      Printf.printf ",\"symbols\":";
++      emit_symbols (symbols_of_source "project-symbols" (Proj.src_body item));
++      Printf.printf "}");
++  Printf.printf "]}\n%!"
++
+ let project_make command manifest epoch =
+   let input = project_input command manifest in
+   let folio =
+diff --git a/lib/command/amlc_cli.ml b/lib/command/amlc_cli.ml
+index c5eb3d2..f2e79a7 100644
+--- a/lib/command/amlc_cli.ml
++++ b/lib/command/amlc_cli.ml
+@@ -164,6 +164,9 @@ let check path args =
+     Aml_cli.check_json path
+   else if info.st_kind = Unix.S_REG && aml path && args = ["--symbols=json"] then
+     Aml_cli.symbols_json path
++  else if (info.st_kind = Unix.S_DIR || String.equal (Filename.extension path) ".amlp")
++      && args = ["--symbols=json"] then
++    Aml_cli.project_symbols_json (manifest "check" path)
+   else if info.st_kind = Unix.S_DIR || String.equal (Filename.extension path) ".amlp"
+   then
+     let req = input_args "check" input_req args in
+diff --git a/lib/command/aml_cli.ml b/lib/command/aml_cli.ml
+index 3e8f25b..3238543 100644
+--- a/lib/command/aml_cli.ml
++++ b/lib/command/aml_cli.ml
+@@ -219,35 +219,58 @@ let parse_with_form_recovery source =
+   in
+   collect source (form_ranges source) []
+
+-let check_json path =
+-  let emit (span : Octra_vm.C_lex.span) message =
+-    Printf.printf
+-      "{\"message\":\"%s\",\"severity\":\"error\",\"start\":{\"line\":%d,\"column\":%d,\"offset\":%d},\"end\":{\"line\":%d,\"column\":%d,\"offset\":%d}}\n%!"
+-      (json_escape message) span.first.line span.first.col span.first.off
+-      span.last.line span.last.col span.last.off
++let contains text fragment =
++  let text_length = String.length text in
++  let fragment_length = String.length fragment in
++  let rec walk index =
++    index + fragment_length <= text_length
++    && (String.sub text index fragment_length = fragment || walk (index + 1))
+   in
+-  let raw = source path in
++  fragment_length = 0 || walk 0
++
++let diagnostic_fix message =
++  if contains message "expected = ) actual =" then "AMLC101", "Insert missing ')'", ")"
++  else if contains message "expected = } actual =" then "AMLC102", "Insert missing '}'", "}"
++  else if contains message "expected = ] actual =" then "AMLC103", "Insert missing ']'", "]"
++  else if contains message "expected = , actual =" then "AMLC104", "Insert missing ','", ","
++  else if contains message "expected = in actual =" then "AMLC105", "Insert missing 'in'", "in "
++  else if contains message "expected = then actual =" then "AMLC106", "Insert missing 'then'", "then "
++  else if contains message "expected = else actual =" then "AMLC107", "Insert missing 'else'", "else "
++  else if contains message "expected = : actual =" then "AMLC108", "Insert missing ':'", ": "
++  else "AMLC100", "Insert unit expression", "unit "
++
++let emit_json_diagnostic ?path (span : Octra_vm.C_lex.span) message =
++  let code, title, text = diagnostic_fix message in
++  let path_field = match path with None -> "" | Some path -> ",\"path\":\"" ^ json_escape path ^ "\"" in
++  Printf.printf
++    "{\"message\":\"%s\",\"severity\":\"error\",\"code\":\"%s\"%s,\"data\":{\"quickfix\":{\"title\":\"%s\",\"newText\":\"%s\"}},\"start\":{\"line\":%d,\"column\":%d,\"offset\":%d},\"end\":{\"line\":%d,\"column\":%d,\"offset\":%d}}\n%!"
++    (json_escape message) code path_field (json_escape title) (json_escape text)
++    span.first.line span.first.col span.first.off span.last.line span.last.col span.last.off
++
++let check_json_source ?path raw =
++  let emit span message = emit_json_diagnostic ?path span message in
+   match Octra_vm.C_lex.diagnostics raw with
+   | _ :: _ as errors ->
+       List.iter (fun error -> emit error.Octra_vm.C_lex.span (Octra_vm.C_lex.text error)) errors;
+-      exit 1
++      false
+   | [] ->
+       let errors, parsed = parse_with_form_recovery raw in
+       if errors <> [] then begin
+         List.iter (fun error -> emit error.Parse.span (Parse.text error)) errors;
+-        exit 1
+-      end;
++        false
++      end else
+       match parsed with
+-      | None -> failwith "parser recovery lost a successful parse"
++      | None -> false
+       | Some parsed ->
+-          begin
+-            match Parse.diagnostics parsed with
+-            | [] -> ()
+-            | errors ->
+-                List.iter (fun error -> emit error.Parse.span (Parse.text error)) errors;
+-                exit 1
++          begin match Parse.diagnostics parsed with
++          | [] -> true
++          | errors ->
++              List.iter (fun error -> emit error.Parse.span (Parse.text error)) errors;
++              false
+           end
+
++let check_json path = if not (check_json_source (source path)) then exit 1
++
+ let type_text typ =
+   match Octra_vm.C_low.typ typ with
+   | Ok value -> Octra_vm.C_type.text value
+@@ -823,6 +846,14 @@ let project_symbols_json manifest =
+       Printf.printf "}");
+   Printf.printf "]}\n%!"
+
++let project_diagnostics_json manifest =
++  let input = project_input "project-diagnostics" manifest in
++  let valid =
++    List.fold_left (fun valid (relative, path) ->
++        check_json_source ~path:relative (source path) && valid) true input.files
++  in
++  if not valid then exit 1
++
+ let project_make command manifest epoch =
+   let input = project_input command manifest in
+   let folio =
+diff --git a/lib/command/amlc_cli.ml b/lib/command/amlc_cli.ml
+index f2e79a7..06dfe51 100644
+--- a/lib/command/amlc_cli.ml
++++ b/lib/command/amlc_cli.ml
+@@ -164,6 +164,9 @@ let check path args =
+     Aml_cli.check_json path
+   else if info.st_kind = Unix.S_REG && aml path && args = ["--symbols=json"] then
+     Aml_cli.symbols_json path
++  else if (info.st_kind = Unix.S_DIR || String.equal (Filename.extension path) ".amlp")
++      && args = ["--diagnostics=json"] then
++    Aml_cli.project_diagnostics_json (manifest "check" path)
+   else if (info.st_kind = Unix.S_DIR || String.equal (Filename.extension path) ".amlp")
+       && args = ["--symbols=json"] then
+     Aml_cli.project_symbols_json (manifest "check" path)
+diff --git a/lib/aml/syntax/c_lex.ml b/lib/aml/syntax/c_lex.ml
+index ee9c053..4f6ce2c 100644
+--- a/lib/aml/syntax/c_lex.ml
++++ b/lib/aml/syntax/c_lex.ml
+@@ -22,6 +22,8 @@ type hold =
+
+ type token =
+   | Program
++  | Import
++  | Export
+   | Size
+   | Measure
+   | Law
+@@ -116,6 +118,7 @@ type token =
+   | Slash
+   | Percent
+   | Ident of string
++  | Text of string
+   | Nat of Z.t
+   | Hex of string
+   | Hold of hold
+@@ -123,6 +126,8 @@ type token =
+
+ type form =
+   | F_program
++  | F_import
++  | F_export
+   | F_size
+   | F_measure
+   | F_law
+@@ -217,6 +222,7 @@ type form =
+   | F_slash
+   | F_percent
+   | F_ident
++  | F_text
+   | F_nat
+   | F_hex
+   | F_hold of hold
+@@ -302,6 +308,8 @@ let rec seek pred state =
+
+ let keyword = function
+   | "program" -> Program
++  | "import" -> Import
++  | "export" -> Export
+   | "size" -> Size
+   | "measure" -> Measure
+   | "law" -> Law
+@@ -392,6 +400,8 @@ let hold_text = function
+
+ let form = function
+   | Program -> F_program
++  | Import -> F_import
++  | Export -> F_export
+   | Size -> F_size
+   | Measure -> F_measure
+   | Law -> F_law
+@@ -486,6 +496,7 @@ let form = function
+   | Slash -> F_slash
+   | Percent -> F_percent
+   | Ident _ -> F_ident
++  | Text _ -> F_text
+   | Nat _ -> F_nat
+   | Hex _ -> F_hex
+   | Hold item -> F_hold item
+@@ -493,6 +504,8 @@ let form = function
+
+ let form_text = function
+   | F_program -> "program"
++  | F_import -> "import"
++  | F_export -> "export"
+   | F_size -> "size"
+   | F_measure -> "measure"
+   | F_law -> "law"
+@@ -587,6 +600,7 @@ let form_text = function
+   | F_slash -> "/"
+   | F_percent -> "%"
+   | F_ident -> "name"
++  | F_text -> "text"
+   | F_nat -> "number"
+   | F_hex -> "hex"
+   | F_hold item -> hold_text item
+@@ -656,6 +670,20 @@ let hex_text state =
+     fill 0;
+     Ok (stop, first, Hex (Bytes.unsafe_to_string out))
+
++let text state =
++  let first = state.pos in
++  let body = next state in
++  let rec walk state =
++    match char state with
++    | Some '"' ->
++        let value = String.sub body.src body.pos.off (state.pos.off - body.pos.off) in
++        Ok (next state, first, Text value)
++    | Some '\n' | None ->
++        Error { cause = Char (Char.code '"'); span = span first state.pos }
++    | Some _ -> walk (next state)
++  in
++  walk body
++
+ let punct state =
+   let first = state.pos in
+   match char state with
+@@ -704,6 +732,10 @@ let rec tokens state out =
+       let* stop, first, tok = hex_text state in
+       let* state, out = push { stop with depth = state.depth } first tok out in
+       tokens state out
++  | Some '"' ->
++      let* stop, first, tok = text state in
++      let* state, out = push { stop with depth = state.depth } first tok out in
++      tokens state out
+   | Some char when digit char ->
+       let* stop, first, tok = number state in
+       let* state, out = push { stop with depth = state.depth } first tok out in
+@@ -779,4 +811,4 @@ let text error =
+   in
+   C_text.clip
+     (Printf.sprintf "line = %d col = %d %s"
+-      error.span.first.line error.span.first.col detail)
+\ No newline at end of file
++      error.span.first.line error.span.first.col detail)
+diff --git a/lib/aml/syntax/c_lex.mli b/lib/aml/syntax/c_lex.mli
+index dd141c1..06f235d 100644
+--- a/lib/aml/syntax/c_lex.mli
++++ b/lib/aml/syntax/c_lex.mli
+@@ -22,6 +22,8 @@ type hold =
+
+ type token =
+   | Program
++  | Import
++  | Export
+   | Size
+   | Measure
+   | Law
+@@ -116,6 +118,7 @@ type token =
+   | Slash
+   | Percent
+   | Ident of string
++  | Text of string
+   | Nat of Z.t
+   | Hex of string
+   | Hold of hold
+@@ -123,6 +126,8 @@ type token =
+
+ type form =
+   | F_program
++  | F_import
++  | F_export
+   | F_size
+   | F_measure
+   | F_law
+@@ -217,6 +222,7 @@ type form =
+   | F_slash
+   | F_percent
+   | F_ident
++  | F_text
+   | F_nat
+   | F_hex
+   | F_hold of hold
+diff --git a/lib/aml/syntax/c_parse.ml b/lib/aml/syntax/c_parse.ml
+index 733559b..df920c2 100644
+--- a/lib/aml/syntax/c_parse.ml
++++ b/lib/aml/syntax/c_parse.ml
+@@ -110,14 +110,22 @@ type error = {
+   span : C_lex.span;
+ }
+
++type import = {
++  path : string;
++  alias : C_syn.name;
++  span : C_lex.span;
++}
++
+ type t = {
+   name : C_syn.name;
++  imports : import list;
+   sizes : C_idx.env;
+   inputs : C_decl.input list;
+   input_spans : (string * C_lex.span) list;
+   decls : fdecl list;
+   fns : C_fun.fn list;
+   form_marks : (C_syn.name * form_marks) list;
++  exports : C_syn.name list;
+   body : C_fun.t;
+   perms : C_perm.set;
+   dtypes : (Z.t * C_data.decl) list;
+@@ -142,6 +150,7 @@ type state = {
+   defs : fdecl list;
+   inst : C_fun.fn Imap.t;
+   fmarks : (C_syn.name * form_marks) list;
++  exports : C_syn.name list;
+   gen : int;
+   marks : C_lex.span option list;
+   mcount : int;
+@@ -390,6 +399,27 @@ let name cause state =
+   | Some value -> Ok (value, state)
+   | None -> Error { cause = cause value; span = first }
+
++let import state =
++  let first = span state in
++  let* state = take C_lex.F_import state in
++  match tok state with
++  | C_lex.Text path ->
++      let* state = take C_lex.F_text state in
++      let* state = take C_lex.F_as state in
++      let* alias, state = name (fun value -> Name value) state in
++      Ok ({ path; alias; span = first }, state)
++  | _ -> need [C_lex.F_text] state
++
++let imports state =
++  let rec walk out state =
++    match tok state with
++    | C_lex.Import ->
++        let* item, state = import state in
++        walk (item :: out) state
++    | _ -> Ok (List.rev out, state)
++  in
++  walk [] state
++
+ let rec data_find name = function
+   | [] -> None
+   | item :: _ when C_syn.name_equal name item.dname -> Some item
+@@ -2059,11 +2089,13 @@ let heads state =
+         walk sizes (input :: inputs) state
+     | C_lex.Ident _ when is_word "veil" state ->
+         Ok (sizes, List.rev inputs, state)
+-    | C_lex.Data | C_lex.Shape | C_lex.Permit | C_lex.Form | C_lex.Term ->
++    | C_lex.Data | C_lex.Shape | C_lex.Permit | C_lex.Form | C_lex.Export
++    | C_lex.Term ->
+         Ok (sizes, List.rev inputs, state)
+     | _ ->
+         need [C_lex.F_size; C_lex.F_measure; C_lex.F_law; C_lex.F_input;
+           C_lex.F_data; C_lex.F_shape; C_lex.F_permit; C_lex.F_form;
++          C_lex.F_export;
+           C_lex.F_ident; C_lex.F_term] state
+   in
+   walk C_idx.empty [] state
+@@ -2086,42 +2118,57 @@ let decls inputs state =
+     | C_lex.Ident _ when is_word "veil" state ->
+         let* state = veil_decl state in
+         walk out state
+-    | C_lex.Form | C_lex.Term -> Ok (List.rev out, state)
++    | C_lex.Form | C_lex.Export | C_lex.Term -> Ok (List.rev out, state)
+     | _ ->
+         need [C_lex.F_data; C_lex.F_shape; C_lex.F_input; C_lex.F_permit;
+-          C_lex.F_ident; C_lex.F_form; C_lex.F_term] state
++          C_lex.F_ident; C_lex.F_form; C_lex.F_export; C_lex.F_term] state
+   in
+   walk (List.rev inputs) state
+
+ let forms state =
+-  let rec walk seen out state =
++  let rec add seen out exported mark state =
++    let* item, marks, state = form state in
++    let name =
++      match item with
++      | Mono value -> value.C_fun.name
++      | Spec value -> value.C_spec.name
++      | Poly value -> C_poly.name value
++    in
++    if List.exists (C_syn.name_equal name) seen then
++      Error { cause = Fun (C_fun.Dup (C_syn.name_text name)); span = mark }
++    else
++      let out =
++        match item with
++        | Mono value -> value :: out
++        | Spec _ | Poly _ -> out
++      in
++      let marks =
++        match item with
++        | Mono value -> fit_form marks value.C_fun.body
++        | Spec _ | Poly _ -> marks
++      in
++      let exports =
++        match exported, item with
++        | true, Mono _ -> name :: state.exports
++        | _ -> state.exports
++      in
++      walk (name :: seen) out { state with
++        defs = item :: state.defs;
++        fmarks = (name, marks) :: state.fmarks;
++        exports;
++      }
++  and walk seen out state =
+     match tok state with
+     | C_lex.Form ->
+         let mark = span state in
+-        let* item, marks, state = form state in
+-        let name =
+-          match item with
+-          | Mono value -> value.C_fun.name
+-          | Spec value -> value.C_spec.name
+-          | Poly value -> C_poly.name value
+-        in
+-        if List.exists (C_syn.name_equal name) seen then
+-          Error { cause = Fun (C_fun.Dup (C_syn.name_text name)); span = mark }
+-        else
+-          let out =
+-            match item with
+-            | Mono value -> value :: out
+-            | Spec _ | Poly _ -> out
+-          in
+-          let marks =
+-            match item with
+-            | Mono value -> fit_form marks value.C_fun.body
+-            | Spec _ | Poly _ -> marks
+-          in
+-          walk (name :: seen) out { state with
+-            defs = item :: state.defs;
+-            fmarks = (name, marks) :: state.fmarks;
+-          }
++        add seen out false mark state
++    | C_lex.Export ->
++        let mark = span state in
++        let* state = take C_lex.F_export state in
++        begin match tok state with
++        | C_lex.Form -> add seen out true mark state
++        | _ -> need [C_lex.F_form] state
++        end
+     | C_lex.Term -> Ok (List.rev out, next state)
+     | _ -> need [C_lex.F_form; C_lex.F_term] state
+   in
+@@ -2165,6 +2212,7 @@ let parse src =
+         defs = [];
+         inst = Imap.empty;
+         fmarks = [];
++        exports = [];
+         gen = 0;
+         marks = [];
+         mcount = 0;
+@@ -2174,6 +2222,7 @@ let parse src =
+       let* state = take C_lex.F_program state in
+       let* name, state = name (fun value -> Name value) state in
+       let* state = take C_lex.F_lbrace state in
++      let* imports, state = imports state in
+       let* sizes, inputs, state = heads state in
+       let state = { state with sizes } in
+       let* inputs, state = decls inputs state in
+@@ -2199,9 +2248,10 @@ let parse src =
+           Error { cause = Decl error;
+             span = decl_span body_span input_spans error }
+         | Ok _ ->
+-            Ok { name; sizes; inputs; input_spans;
++            Ok { name; imports; sizes; inputs; input_spans;
+               decls = List.rev state.defs; fns;
+               form_marks = state.fmarks; body;
++              exports = List.rev state.exports;
+               perms = state.perms;
+               dtypes = List.rev_map
+                 (fun (item : dtype) -> item.code, item.decl) state.data;
+@@ -2215,12 +2265,17 @@ let parse src =
+       end
+
+ let name (program : t) = program.name
++let imports (program : t) = program.imports
++let import_path (item : import) = item.path
++let import_alias (item : import) = item.alias
++let import_span (item : import) = item.span
+ let binds (program : t) = C_decl.binds_in program.sizes program.inputs
+ let perms (program : t) = program.perms
+ let dtypes (program : t) = program.dtypes
+ let rtypes (program : t) = program.rtypes
+ let decls (program : t) = program.decls
+ let forms (program : t) = program.fns
++let exports (program : t) = program.exports
+ let body (program : t) = program.body
+ let body_marks (program : t) = program.body_marks
+ let body_span (program : t) = program.body_span
+diff --git a/lib/aml/syntax/c_parse.mli b/lib/aml/syntax/c_parse.mli
+index ab25436..7896e5e 100644
+--- a/lib/aml/syntax/c_parse.mli
++++ b/lib/aml/syntax/c_parse.mli
+@@ -3,6 +3,7 @@
+
+ type t
+ type veil
++type import
+
+ type fdecl =
+   | Mono of C_fun.fn
+@@ -59,12 +60,17 @@ type error = {
+
+ val parse : string -> (t, error) result
+ val name : t -> C_syn.name
++val imports : t -> import list
++val import_path : import -> string
++val import_alias : import -> C_syn.name
++val import_span : import -> C_lex.span
+ val binds : t -> (C_syn.bind list, C_decl.error) result
+ val perms : t -> C_perm.set
+ val dtypes : t -> (Z.t * C_data.decl) list
+ val rtypes : t -> (Z.t * C_rec.decl) list
+ val decls : t -> fdecl list
+ val forms : t -> C_fun.fn list
++val exports : t -> C_syn.name list
+ val body : t -> C_fun.t
+ val body_marks : t -> C_lex.span option list
+ val body_span : t -> C_lex.span
+diff --git a/test/regression_source.ml b/test/regression_source.ml
+index 6a5dcb4..9f3ef81 100644
+--- a/test/regression_source.ml
++++ b/test/regression_source.ml
+@@ -393,6 +393,30 @@ program Veil {
+
+ let plain = "program Plain { term 0 }"
+
++let module_syntax = {|
++program Checkout {
++  import "math.aml" as Math
++  export form add [] (many value: int) ->[many] int marks {} = value + 1
++  term 0
++}
++|}
++
++let check_module_syntax () =
++  match Octra_vm.C_parse.parse module_syntax with
++  | Error error -> fail "module syntax" (Octra_vm.C_parse.text error)
++  | Ok parsed ->
++      begin match Octra_vm.C_parse.imports parsed with
++      | [item] when String.equal (Octra_vm.C_parse.import_path item) "math.aml"
++                    && String.equal
++                      (Octra_vm.C_syn.name_text (Octra_vm.C_parse.import_alias item))
++                      "Math" -> ()
++      | _ -> fail "module syntax" "import metadata differs"
++      end;
++      begin match Octra_vm.C_parse.exports parsed with
++      | [name] when String.equal (Octra_vm.C_syn.name_text name) "add" -> ()
++      | _ -> fail "module syntax" "export metadata differs"
++      end
++
+ let nul_string =
+   "program Nul { public view fn value(): string { return \"x"
+   ^ String.make 1 '\000'
+@@ -412,6 +436,7 @@ let run () =
+   core_refuse "vector index" "vec index = 5 size = 3" core_vec_index;
+   if not (Contract_cli.legacy_source legacy_program) then
+     fail "legacy source" "program not recognized";
++  check_module_syntax ();
+   core_result "direct form" (Octra_vm.C_emit.Int (Z.of_int 42)) direct_form;
+   core_equal "direct use equality" direct_form used_form;
+   core_result "let before use" (Octra_vm.C_emit.Int (Z.of_int 42)) let_use;
+diff --git a/lib/command/aml_cli.ml b/lib/command/aml_cli.ml
+index 3238543..fcf4b57 100644
+--- a/lib/command/aml_cli.ml
++++ b/lib/command/aml_cli.ml
+@@ -276,7 +276,7 @@ let type_text typ =
+   | Ok value -> Octra_vm.C_type.text value
+   | Error _ -> "unknown"
+
+-let symbols_of_source command raw =
++let module_info_of_source command raw =
+   match Parse.parse raw with
+   | Error error -> fail command (Parse.text error)
+   | Ok parsed ->
+@@ -285,12 +285,28 @@ let symbols_of_source command raw =
+         | error :: _ -> fail command (Parse.text error)
+         | [] ->
+             let forms = Parse.forms parsed in
+-            ("program", Octra_vm.C_syn.name_text (Parse.name parsed), "program")
+-            :: List.map (fun fn ->
++            let symbols =
++              ("program", Octra_vm.C_syn.name_text (Parse.name parsed), "program")
++              :: List.map (fun fn ->
+               "form", Octra_vm.C_syn.name_text fn.Octra_vm.C_fun.name,
+                 type_text fn.arr.out) forms
++            in
++            let imports =
++              List.map (fun item ->
++                Parse.import_path item,
++                Octra_vm.C_syn.name_text (Parse.import_alias item))
++                (Parse.imports parsed)
++            in
++            let exports =
++              List.map Octra_vm.C_syn.name_text (Parse.exports parsed)
++            in
++            symbols, imports, exports
+       end
+
++let symbols_of_source command raw =
++  let symbols, _, _ = module_info_of_source command raw in
++  symbols
++
+ let emit_symbols symbols =
+   let emit separator (kind, name, typ) =
+     Printf.printf "%s{\"kind\":\"%s\",\"name\":\"%s\",\"type\":\"%s\"}"
+@@ -832,6 +848,13 @@ let project_symbols_json manifest =
+       Printf.printf "%s\"%s\"" (if index = 0 then "" else ",") (json_escape value)) values;
+     Printf.printf "]"
+   in
++  let emit_imports values =
++    Printf.printf "[";
++    List.iteri (fun index (path, alias) ->
++      Printf.printf "%s{\"path\":\"%s\",\"alias\":\"%s\"}"
++        (if index = 0 then "" else ",") (json_escape path) (json_escape alias)) values;
++    Printf.printf "]"
++  in
+   Printf.printf "{\"version\":1,\"sources\":[";
+   Proj.srcs input.image.project
+   |> List.iteri (fun index item ->
+@@ -841,8 +864,14 @@ let project_symbols_json manifest =
+       emit_strings (Proj.src_deps item);
+       Printf.printf ",\"roots\":";
+       emit_strings (root_names path);
++      let symbols, imports, exports =
++        module_info_of_source "project-symbols" (Proj.src_body item) in
++      Printf.printf ",\"imports\":";
++      emit_imports imports;
++      Printf.printf ",\"exports\":";
++      emit_strings exports;
+       Printf.printf ",\"symbols\":";
+-      emit_symbols (symbols_of_source "project-symbols" (Proj.src_body item));
++      emit_symbols symbols;
+       Printf.printf "}");
+   Printf.printf "]}\n%!"
+
+diff --git a/lib/command/aml_cli.ml b/lib/command/aml_cli.ml
+index fcf4b57..b3f4f09 100644
+--- a/lib/command/aml_cli.ml
++++ b/lib/command/aml_cli.ml
+@@ -229,7 +229,10 @@ let contains text fragment =
+   fragment_length = 0 || walk 0
+
+ let diagnostic_fix message =
+-  if contains message "expected = ) actual =" then "AMLC101", "Insert missing ')'", ")"
++  if contains message "module import target is not a project source" then "AMLC201", "Add the imported source to project.amlp", ""
++  else if contains message "module import alias is repeated" then "AMLC202", "Rename the import alias", ""
++  else if contains message "module import cycle" then "AMLC203", "Remove the cyclic import", ""
++  else if contains message "expected = ) actual =" then "AMLC101", "Insert missing ')'", ")"
+   else if contains message "expected = } actual =" then "AMLC102", "Insert missing '}'", "}"
+   else if contains message "expected = ] actual =" then "AMLC103", "Insert missing ']'", "]"
+   else if contains message "expected = , actual =" then "AMLC104", "Insert missing ','", ","
+@@ -877,11 +880,52 @@ let project_symbols_json manifest =
+
+ let project_diagnostics_json manifest =
+   let input = project_input "project-diagnostics" manifest in
+-  let valid =
++  let source_valid =
+     List.fold_left (fun valid (relative, path) ->
+         check_json_source ~path:relative (source path) && valid) true input.files
+   in
+-  if not valid then exit 1
++  let modules =
++    input.files |> List.filter_map (fun (relative, full) ->
++        match Parse.parse (source full) with
++        | Ok parsed -> Some (relative, full, Parse.imports parsed)
++        | Error _ -> None)
++  in
++  let known = List.map (fun (_, full, _) -> full) modules in
++  let graph_valid = ref true in
++  let emit relative span message =
++    graph_valid := false;
++    emit_json_diagnostic ~path:relative span message
++  in
++  List.iter (fun (relative, full, imports) ->
++      let aliases = Hashtbl.create 4 in
++      List.iter (fun item ->
++          let alias = Octra_vm.C_syn.name_text (Parse.import_alias item) in
++          if Hashtbl.mem aliases alias then
++            emit relative (Parse.import_span item)
++              ("module import alias is repeated: " ^ alias)
++          else Hashtbl.add aliases alias true;
++          let target = Filename.concat (Filename.dirname full) (Parse.import_path item) in
++          match (try Some (Unix.realpath target) with Unix.Unix_error _ -> None) with
++          | Some target when List.mem target known -> ()
++          | _ -> emit relative (Parse.import_span item)
++              ("module import target is not a project source: " ^ Parse.import_path item)) imports) modules;
++  let rec visit trail (_, full, imports as item) =
++    let trail = full :: trail in
++    List.iter (fun imported ->
++        let target = Filename.concat (Filename.dirname full) (Parse.import_path imported) in
++        match (try Some (Unix.realpath target) with Unix.Unix_error _ -> None) with
++        | Some target when List.mem target trail ->
++            emit (let relative, _, _ = item in relative) (Parse.import_span imported)
++              ("module import cycle: " ^ Parse.import_path imported)
++        | Some target ->
++            begin match List.find_opt (fun (_, candidate, _) -> String.equal candidate target) modules with
++            | Some next -> visit trail next
++            | None -> ()
++            end
++        | None -> ()) imports
++  in
++  List.iter (visit []) modules;
++  if not source_valid || not !graph_valid then exit 1
+
+ let project_make command manifest epoch =
+   let input = project_input command manifest in
+diff --git a/lib/aml/artifact/project/c_folio.ml b/lib/aml/artifact/project/c_folio.ml
+index 85a7ac8..caa9a81 100644
+--- a/lib/aml/artifact/project/c_folio.ml
++++ b/lib/aml/artifact/project/c_folio.ml
+@@ -186,6 +186,104 @@ let src_at path values =
+
+ let source project path = src_at path (C_proj.srcs project)
+
++let rec replace_all source needle replacement offset out =
++  match String.index_from_opt source offset needle.[0] with
++  | None -> Buffer.add_substring out source offset (String.length source - offset)
++  | Some at when at + String.length needle <= String.length source
++                 && String.sub source at (String.length needle) = needle ->
++      Buffer.add_substring out source offset (at - offset);
++      Buffer.add_string out replacement;
++      replace_all source needle replacement (at + String.length needle) out
++  | Some at -> replace_all source needle replacement (at + 1) out
++
++let without_import_lines source imports =
++  let out = Bytes.of_string source in
++  List.iter (fun item ->
++      let first = (C_parse.import_span item).C_lex.first.off in
++      let rec last at =
++        if at >= Bytes.length out || Bytes.get out at = '\n' then at else last (at + 1)
++      in
++      for at = first to last first - 1 do Bytes.set out at ' ' done) imports;
++  Bytes.unsafe_to_string out
++
++let exported_forms source =
++  match C_parse.parse source with
++  | Error _ -> []
++  | Ok parsed ->
++      let exported = C_parse.exports parsed in
++      let is_exported name = List.exists (C_syn.name_equal name) exported in
++      begin match C_lex.scan source with
++      | Error _ -> []
++      | Ok items ->
++          let limit = Array.length items in
++          let rec finish index depth =
++            if index >= limit then String.length source
++            else match items.(index).C_lex.tok with
++            | C_lex.Lbrace -> finish (index + 1) (depth + 1)
++            | C_lex.Rbrace when depth = 1 -> items.(index).span.first.off
++            | C_lex.Rbrace -> finish (index + 1) (depth - 1)
++            | C_lex.Form | C_lex.Term | C_lex.Export when depth = 1 ->
++                items.(index).span.first.off
++            | _ -> finish (index + 1) depth
++          in
++          let rec walk index depth out =
++            if index >= limit then List.rev out
++            else
++              let item = items.(index) in
++              match item.C_lex.tok with
++              | C_lex.Lbrace -> walk (index + 1) (depth + 1) out
++              | C_lex.Rbrace -> walk (index + 1) (depth - 1) out
++              | C_lex.Form when depth = 1 ->
++                  begin match if index + 1 < limit then items.(index + 1).tok else C_lex.Eof with
++                  | C_lex.Ident value ->
++                      begin match C_syn.name value with
++                      | Some name when is_exported name ->
++                          let first = item.span.first.off in
++                          let last = finish (index + 1) depth in
++                          walk (index + 1) depth (String.sub source first (last - first) :: out)
++                      | _ -> walk (index + 1) depth out
++                      end
++                  | _ -> walk (index + 1) depth out
++                  end
++              | _ -> walk (index + 1) depth out
++          in
++          walk 0 0 []
++      end
++
++let linked_body project item =
++  match C_parse.parse (C_proj.src_body item) with
++  | Error _ -> C_proj.src_body item
++  | Ok parsed ->
++      let imports = C_parse.imports parsed in
++      let body = without_import_lines (C_proj.src_body item) imports in
++      let linked_forms, body =
++        List.fold_left (fun (forms, body) (imported_item : C_parse.import) ->
++            let path = Filename.concat (Filename.dirname (C_proj.src_path item))
++              (C_parse.import_path imported_item) in
++            match source project path with
++            | None -> forms, body
++            | Some imported ->
++                let alias = C_syn.name_text (C_parse.import_alias imported_item) in
++                let out = Buffer.create (String.length body) in
++                replace_all body (alias ^ ".") "" 0 out;
++                exported_forms (C_proj.src_body imported) @ forms, Buffer.contents out)
++          ([], body) imports
++      in
++      match C_lex.scan body with
++      | Error _ -> body
++      | Ok items ->
++          let rec term index depth =
++            if index >= Array.length items then String.length body
++            else match items.(index).C_lex.tok with
++            | C_lex.Lbrace -> term (index + 1) (depth + 1)
++            | C_lex.Rbrace -> term (index + 1) (depth - 1)
++            | C_lex.Term when depth = 1 -> items.(index).span.first.off
++            | _ -> term (index + 1) depth
++          in
++          let at = term 0 0 in
++          String.sub body 0 at ^ String.concat "\n" (List.rev linked_forms)
++            ^ "\n" ^ String.sub body at (String.length body - at)
++
+ let feed_at input =
+   if String.equal input "" then Some None
+   else
+@@ -228,9 +326,10 @@ let one schedule epoch project (root : C_proj.root) =
+   match source project root.path with
+   | None -> Error (Root root.path)
+   | Some source ->
++    let body = linked_body project source in
+     let* image =
+       if String.equal root.feed "" then
+-        match C_octb.compile source.body with
++        match C_octb.compile body with
+         | Ok value -> Ok value
+         | Error error -> Error (Octb (root.path, error))
+       else
+@@ -239,12 +338,12 @@ let one schedule epoch project (root : C_proj.root) =
+           | Ok value -> Ok value
+           | Error error -> Error (Feed (root.path, error))
+         in
+-        match C_octb.compile_feed source.body feed with
++        match C_octb.compile_feed body feed with
+         | Ok value -> Ok value
+         | Error error -> Error (Octb (root.path, error))
+     in
+     let* seal =
+-      match C_seal.make schedule ~epoch source.body with
++      match C_seal.make schedule ~epoch body with
+       | Ok value -> Ok value
+       | Error error -> Error (Seal (root.path, error))
+     in
+@@ -392,4 +491,4 @@ let text = function
+   | Epoch value ->
+     Printf.sprintf "project folio epoch is invalid value = %s maximum = %s"
+       (Z.to_string value) (Z.to_string epoch_max)
+-  | Form -> "project folio form is invalid"
+\ No newline at end of file
++  | Form -> "project folio form is invalid"
+diff --git a/lib/aml/artifact/project/c_folio.ml b/lib/aml/artifact/project/c_folio.ml
+index caa9a81..b420057 100644
+--- a/lib/aml/artifact/project/c_folio.ml
++++ b/lib/aml/artifact/project/c_folio.ml
+@@ -194,17 +194,16 @@ let rec replace_all source needle replacement offset out =
+       Buffer.add_substring out source offset (at - offset);
+       Buffer.add_string out replacement;
+       replace_all source needle replacement (at + String.length needle) out
+-  | Some at -> replace_all source needle replacement (at + 1) out
+-
+-let without_import_lines source imports =
+-  let out = Bytes.of_string source in
+-  List.iter (fun item ->
+-      let first = (C_parse.import_span item).C_lex.first.off in
+-      let rec last at =
+-        if at >= Bytes.length out || Bytes.get out at = '\n' then at else last (at + 1)
+-      in
+-      for at = first to last first - 1 do Bytes.set out at ' ' done) imports;
+-  Bytes.unsafe_to_string out
++  | Some at ->
++      Buffer.add_substring out source offset (at - offset + 1);
++      replace_all source needle replacement (at + 1) out
++
++let without_import_lines source _imports =
++  source |> String.split_on_char '\n' |> List.map (fun line ->
++      let clean = String.trim line in
++      if String.length clean >= 6 && String.sub clean 0 6 = "import" then
++        String.make (String.length line) ' '
++      else line) |> String.concat "\n"
+
+ let exported_forms source =
+   match C_parse.parse source with
+@@ -250,16 +249,37 @@ let exported_forms source =
+           walk 0 0 []
+       end
+
++let module_parse source =
++  match C_parse.parse source with
++  | Ok parsed -> Some parsed
++  | Error _ ->
++      let marker = "term" in
++      let rec find at =
++        match String.index_from_opt source at marker.[0] with
++        | Some found when found + String.length marker <= String.length source
++                          && String.sub source found (String.length marker) = marker -> Some found
++        | Some found -> find (found + 1)
++        | None -> None
++      in
++      begin match find 0 with
++      | None -> None
++      | Some at ->
++          let masked = String.sub source 0 at ^ "term 0\n}" in
++          match C_parse.parse masked with Ok parsed -> Some parsed | Error _ -> None
++      end
++
+ let linked_body project item =
+-  match C_parse.parse (C_proj.src_body item) with
+-  | Error _ -> C_proj.src_body item
+-  | Ok parsed ->
++  match module_parse (C_proj.src_body item) with
++  | None -> C_proj.src_body item
++  | Some parsed ->
+       let imports = C_parse.imports parsed in
+       let body = without_import_lines (C_proj.src_body item) imports in
+       let linked_forms, body =
+         List.fold_left (fun (forms, body) (imported_item : C_parse.import) ->
+-            let path = Filename.concat (Filename.dirname (C_proj.src_path item))
+-              (C_parse.import_path imported_item) in
++            let parent = Filename.dirname (C_proj.src_path item) in
++            let path =
++              if String.equal parent "." then C_parse.import_path imported_item
++              else Filename.concat parent (C_parse.import_path imported_item) in
+             match source project path with
+             | None -> forms, body
+             | Some imported ->
+@@ -269,20 +289,17 @@ let linked_body project item =
+                 exported_forms (C_proj.src_body imported) @ forms, Buffer.contents out)
+           ([], body) imports
+       in
+-      match C_lex.scan body with
+-      | Error _ -> body
+-      | Ok items ->
+-          let rec term index depth =
+-            if index >= Array.length items then String.length body
+-            else match items.(index).C_lex.tok with
+-            | C_lex.Lbrace -> term (index + 1) (depth + 1)
+-            | C_lex.Rbrace -> term (index + 1) (depth - 1)
+-            | C_lex.Term when depth = 1 -> items.(index).span.first.off
+-            | _ -> term (index + 1) depth
+-          in
+-          let at = term 0 0 in
+-          String.sub body 0 at ^ String.concat "\n" (List.rev linked_forms)
+-            ^ "\n" ^ String.sub body at (String.length body - at)
++      let marker = "term" in
++      let rec find at =
++        match String.index_from_opt body at marker.[0] with
++        | Some found when found + String.length marker <= String.length body
++                          && String.sub body found (String.length marker) = marker -> found
++        | Some found -> find (found + 1)
++        | None -> String.length body
++      in
++      let at = find 0 in
++      String.sub body 0 at ^ String.concat "\n" (List.rev linked_forms)
++        ^ "\n" ^ String.sub body at (String.length body - at)
+
+ let feed_at input =
+   if String.equal input "" then Some None
+diff --git a/lib/command/aml_cli.ml b/lib/command/aml_cli.ml
+index b3f4f09..1096deb 100644
+--- a/lib/command/aml_cli.ml
++++ b/lib/command/aml_cli.ml
+@@ -232,6 +232,7 @@ let diagnostic_fix message =
+   if contains message "module import target is not a project source" then "AMLC201", "Add the imported source to project.amlp", ""
+   else if contains message "module import alias is repeated" then "AMLC202", "Rename the import alias", ""
+   else if contains message "module import cycle" then "AMLC203", "Remove the cyclic import", ""
++  else if contains message "module import export is ambiguous" then "AMLC204", "Use a unique exported form name", ""
+   else if contains message "expected = ) actual =" then "AMLC101", "Insert missing ')'", ")"
+   else if contains message "expected = } actual =" then "AMLC102", "Insert missing '}'", "}"
+   else if contains message "expected = ] actual =" then "AMLC103", "Insert missing ']'", "]"
+@@ -887,17 +888,18 @@ let project_diagnostics_json manifest =
+   let modules =
+     input.files |> List.filter_map (fun (relative, full) ->
+         match Parse.parse (source full) with
+-        | Ok parsed -> Some (relative, full, Parse.imports parsed)
++        | Ok parsed -> Some (relative, full, Parse.imports parsed, Parse.exports parsed)
+         | Error _ -> None)
+   in
+-  let known = List.map (fun (_, full, _) -> full) modules in
++  let known = List.map (fun (_, full, _, _) -> full) modules in
+   let graph_valid = ref true in
+   let emit relative span message =
+     graph_valid := false;
+     emit_json_diagnostic ~path:relative span message
+   in
+-  List.iter (fun (relative, full, imports) ->
++  List.iter (fun (relative, full, imports, _) ->
+       let aliases = Hashtbl.create 4 in
++      let exports = Hashtbl.create 8 in
+       List.iter (fun item ->
+           let alias = Octra_vm.C_syn.name_text (Parse.import_alias item) in
+           if Hashtbl.mem aliases alias then
+@@ -906,19 +908,28 @@ let project_diagnostics_json manifest =
+           else Hashtbl.add aliases alias true;
+           let target = Filename.concat (Filename.dirname full) (Parse.import_path item) in
+           match (try Some (Unix.realpath target) with Unix.Unix_error _ -> None) with
+-          | Some target when List.mem target known -> ()
++          | Some target when List.mem target known ->
++              begin match List.find_opt (fun (_, candidate, _, _) -> String.equal candidate target) modules with
++              | Some (_, _, _, names) -> List.iter (fun name ->
++                  let name = Octra_vm.C_syn.name_text name in
++                  if Hashtbl.mem exports name then
++                    emit relative (Parse.import_span item)
++                      ("module import export is ambiguous: " ^ name)
++                  else Hashtbl.add exports name true) names
++              | None -> ()
++              end
+           | _ -> emit relative (Parse.import_span item)
+               ("module import target is not a project source: " ^ Parse.import_path item)) imports) modules;
+-  let rec visit trail (_, full, imports as item) =
++  let rec visit trail (_, full, imports, _ as item) =
+     let trail = full :: trail in
+     List.iter (fun imported ->
+         let target = Filename.concat (Filename.dirname full) (Parse.import_path imported) in
+         match (try Some (Unix.realpath target) with Unix.Unix_error _ -> None) with
+         | Some target when List.mem target trail ->
+-            emit (let relative, _, _ = item in relative) (Parse.import_span imported)
++            emit (let relative, _, _, _ = item in relative) (Parse.import_span imported)
+               ("module import cycle: " ^ Parse.import_path imported)
+         | Some target ->
+-            begin match List.find_opt (fun (_, candidate, _) -> String.equal candidate target) modules with
++            begin match List.find_opt (fun (_, candidate, _, _) -> String.equal candidate target) modules with
+             | Some next -> visit trail next
+             | None -> ()
+             end
+diff --git a/lib/aml/artifact/project/c_folio.ml b/lib/aml/artifact/project/c_folio.ml
+index b420057..0dd8fa2 100644
+--- a/lib/aml/artifact/project/c_folio.ml
++++ b/lib/aml/artifact/project/c_folio.ml
+@@ -205,7 +205,18 @@ let without_import_lines source _imports =
+         String.make (String.length line) ' '
+       else line) |> String.concat "\n"
+
+-let exported_forms source =
++let normalized_name path name =
++  let safe =
++    String.map (function 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' as char -> char | _ -> '_') path
++  in
++  "__aml_" ^ safe ^ "_" ^ name
++
++let replace_text source needle replacement =
++  let out = Buffer.create (String.length source + String.length replacement) in
++  replace_all source needle replacement 0 out;
++  Buffer.contents out
++
++let exported_forms path source =
+   match C_parse.parse source with
+   | Error _ -> []
+   | Ok parsed ->
+@@ -239,7 +250,10 @@ let exported_forms source =
+                       | Some name when is_exported name ->
+                           let first = item.span.first.off in
+                           let last = finish (index + 1) depth in
+-                          walk (index + 1) depth (String.sub source first (last - first) :: out)
++                          let raw = String.sub source first (last - first) in
++                          let internal = normalized_name path value in
++                          let linked = replace_text raw ("form " ^ value) ("form " ^ internal) in
++                          walk (index + 1) depth (linked :: out)
+                       | _ -> walk (index + 1) depth out
+                       end
+                   | _ -> walk (index + 1) depth out
+@@ -284,9 +298,16 @@ let linked_body project item =
+             | None -> forms, body
+             | Some imported ->
+                 let alias = C_syn.name_text (C_parse.import_alias imported_item) in
+-                let out = Buffer.create (String.length body) in
+-                replace_all body (alias ^ ".") "" 0 out;
+-                exported_forms (C_proj.src_body imported) @ forms, Buffer.contents out)
++                let exports =
++                  match module_parse (C_proj.src_body imported) with
++                  | Some parsed -> C_parse.exports parsed
++                  | None -> []
++                in
++                let body = List.fold_left (fun body name ->
++                    let name = C_syn.name_text name in
++                    replace_text body (alias ^ "." ^ name)
++                      (normalized_name path name)) body exports in
++                exported_forms path (C_proj.src_body imported) @ forms, body)
+           ([], body) imports
+       in
+       let marker = "term" in
+diff --git a/lib/command/aml_cli.ml b/lib/command/aml_cli.ml
+index 1096deb..b3f4f09 100644
+--- a/lib/command/aml_cli.ml
++++ b/lib/command/aml_cli.ml
+@@ -232,7 +232,6 @@ let diagnostic_fix message =
+   if contains message "module import target is not a project source" then "AMLC201", "Add the imported source to project.amlp", ""
+   else if contains message "module import alias is repeated" then "AMLC202", "Rename the import alias", ""
+   else if contains message "module import cycle" then "AMLC203", "Remove the cyclic import", ""
+-  else if contains message "module import export is ambiguous" then "AMLC204", "Use a unique exported form name", ""
+   else if contains message "expected = ) actual =" then "AMLC101", "Insert missing ')'", ")"
+   else if contains message "expected = } actual =" then "AMLC102", "Insert missing '}'", "}"
+   else if contains message "expected = ] actual =" then "AMLC103", "Insert missing ']'", "]"
+@@ -888,18 +887,17 @@ let project_diagnostics_json manifest =
+   let modules =
+     input.files |> List.filter_map (fun (relative, full) ->
+         match Parse.parse (source full) with
+-        | Ok parsed -> Some (relative, full, Parse.imports parsed, Parse.exports parsed)
++        | Ok parsed -> Some (relative, full, Parse.imports parsed)
+         | Error _ -> None)
+   in
+-  let known = List.map (fun (_, full, _, _) -> full) modules in
++  let known = List.map (fun (_, full, _) -> full) modules in
+   let graph_valid = ref true in
+   let emit relative span message =
+     graph_valid := false;
+     emit_json_diagnostic ~path:relative span message
+   in
+-  List.iter (fun (relative, full, imports, _) ->
++  List.iter (fun (relative, full, imports) ->
+       let aliases = Hashtbl.create 4 in
+-      let exports = Hashtbl.create 8 in
+       List.iter (fun item ->
+           let alias = Octra_vm.C_syn.name_text (Parse.import_alias item) in
+           if Hashtbl.mem aliases alias then
+@@ -908,28 +906,19 @@ let project_diagnostics_json manifest =
+           else Hashtbl.add aliases alias true;
+           let target = Filename.concat (Filename.dirname full) (Parse.import_path item) in
+           match (try Some (Unix.realpath target) with Unix.Unix_error _ -> None) with
+-          | Some target when List.mem target known ->
+-              begin match List.find_opt (fun (_, candidate, _, _) -> String.equal candidate target) modules with
+-              | Some (_, _, _, names) -> List.iter (fun name ->
+-                  let name = Octra_vm.C_syn.name_text name in
+-                  if Hashtbl.mem exports name then
+-                    emit relative (Parse.import_span item)
+-                      ("module import export is ambiguous: " ^ name)
+-                  else Hashtbl.add exports name true) names
+-              | None -> ()
+-              end
++          | Some target when List.mem target known -> ()
+           | _ -> emit relative (Parse.import_span item)
+               ("module import target is not a project source: " ^ Parse.import_path item)) imports) modules;
+-  let rec visit trail (_, full, imports, _ as item) =
++  let rec visit trail (_, full, imports as item) =
+     let trail = full :: trail in
+     List.iter (fun imported ->
+         let target = Filename.concat (Filename.dirname full) (Parse.import_path imported) in
+         match (try Some (Unix.realpath target) with Unix.Unix_error _ -> None) with
+         | Some target when List.mem target trail ->
+-            emit (let relative, _, _, _ = item in relative) (Parse.import_span imported)
++            emit (let relative, _, _ = item in relative) (Parse.import_span imported)
+               ("module import cycle: " ^ Parse.import_path imported)
+         | Some target ->
+-            begin match List.find_opt (fun (_, candidate, _, _) -> String.equal candidate target) modules with
++            begin match List.find_opt (fun (_, candidate, _) -> String.equal candidate target) modules with
+             | Some next -> visit trail next
+             | None -> ()
+             end
+diff --git a/lib/aml/artifact/project/c_folio.ml b/lib/aml/artifact/project/c_folio.ml
+index 0dd8fa2..e6585c9 100644
+--- a/lib/aml/artifact/project/c_folio.ml
++++ b/lib/aml/artifact/project/c_folio.ml
+@@ -216,13 +216,8 @@ let replace_text source needle replacement =
+   replace_all source needle replacement 0 out;
+   Buffer.contents out
+ 
+-let exported_forms path source =
+-  match C_parse.parse source with
+-  | Error _ -> []
+-  | Ok parsed ->
+-      let exported = C_parse.exports parsed in
+-      let is_exported name = List.exists (C_syn.name_equal name) exported in
+-      begin match C_lex.scan source with
++let linked_forms path source =
++  match C_lex.scan source with
+       | Error _ -> []
+       | Ok items ->
+           let limit = Array.length items in
+@@ -247,42 +242,77 @@ let exported_forms path source =
+                   begin match if index + 1 < limit then items.(index + 1).tok else C_lex.Eof with
+                   | C_lex.Ident value ->
+                       begin match C_syn.name value with
+-                      | Some name when is_exported name ->
++                      | Some _ ->
+                           let first = item.span.first.off in
+                           let last = finish (index + 1) depth in
+                           let raw = String.sub source first (last - first) in
+-                          let internal = normalized_name path value in
+-                          let linked = replace_text raw ("form " ^ value) ("form " ^ internal) in
+-                          walk (index + 1) depth (linked :: out)
++                          walk (index + 1) depth ((value, raw) :: out)
+                       | _ -> walk (index + 1) depth out
+                       end
+                   | _ -> walk (index + 1) depth out
+                   end
+               | _ -> walk (index + 1) depth out
+           in
+-          walk 0 0 []
+-      end
++          let forms = walk 0 0 [] in
++          forms |> List.map (fun (name, raw) ->
++              let linked = replace_text raw ("form " ^ name)
++                ("form " ^ normalized_name path name) in
++              List.fold_left (fun linked (called, _) ->
++                  replace_text linked (called ^ "(") (normalized_name path called ^ "("))
++                linked forms)
+ 
+ let module_parse source =
+   match C_parse.parse source with
+-  | Ok parsed -> Some parsed
+-  | Error _ ->
+-      let marker = "term" in
+-      let rec find at =
+-        match String.index_from_opt source at marker.[0] with
+-        | Some found when found + String.length marker <= String.length source
+-                          && String.sub source found (String.length marker) = marker -> Some found
+-        | Some found -> find (found + 1)
+-        | None -> None
++  | Ok parsed when C_parse.diagnostics parsed = [] -> Some parsed
++  | Ok _ | Error _ ->
++      let marker_at marker =
++        let rec find at =
++          match String.index_from_opt source at marker.[0] with
++          | Some found when found + String.length marker <= String.length source
++                            && String.sub source found (String.length marker) = marker -> Some found
++          | Some found -> find (found + 1)
++          | None -> None
++        in
++        find 0
+       in
+-      begin match find 0 with
++      let first =
++        [marker_at "export"; marker_at "form"; marker_at "term"]
++        |> List.filter_map Fun.id |> List.sort Int.compare
++        |> function first :: _ -> Some first | [] -> None
++      in
++      begin match first with
+       | None -> None
+       | Some at ->
+           let masked = String.sub source 0 at ^ "term 0\n}" in
+           match C_parse.parse masked with Ok parsed -> Some parsed | Error _ -> None
+       end
+ 
+-let linked_body project item =
++let exported_names source =
++  let marker = "export form " in
++  let rec scan offset names =
++    match String.index_from_opt source offset 'e' with
++    | None -> List.rev names
++    | Some at when at + String.length marker <= String.length source
++                   && String.sub source at (String.length marker) = marker ->
++        let start = at + String.length marker in
++        let rec finish at =
++          if at >= String.length source then at else
++          match source.[at] with
++          | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> finish (at + 1)
++          | _ -> at
++        in
++        let last = finish start in
++        let names =
++          if last = start then names
++          else String.sub source start (last - start) :: names
++        in
++        scan last names
++    | Some at -> scan (at + 1) names
++  in
++  scan 0 []
++
++let rec linked_body project visiting item =
++  if List.mem (C_proj.src_path item) visiting then C_proj.src_body item else
+   match module_parse (C_proj.src_body item) with
+   | None -> C_proj.src_body item
+   | Some parsed ->
+@@ -298,28 +328,31 @@ let linked_body project item =
+             | None -> forms, body
+             | Some imported ->
+                 let alias = C_syn.name_text (C_parse.import_alias imported_item) in
+-                let exports =
+-                  match module_parse (C_proj.src_body imported) with
+-                  | Some parsed -> C_parse.exports parsed
+-                  | None -> []
+-                in
++                let exports = exported_names (C_proj.src_body imported) in
+                 let body = List.fold_left (fun body name ->
+-                    let name = C_syn.name_text name in
+                     replace_text body (alias ^ "." ^ name)
+                       (normalized_name path name)) body exports in
+-                exported_forms path (C_proj.src_body imported) @ forms, body)
++                linked_forms path
++                  (linked_body project (C_proj.src_path item :: visiting) imported)
++                  @ forms, body)
+           ([], body) imports
+       in
+-      let marker = "term" in
+-      let rec find at =
+-        match String.index_from_opt body at marker.[0] with
+-        | Some found when found + String.length marker <= String.length body
+-                          && String.sub body found (String.length marker) = marker -> found
+-        | Some found -> find (found + 1)
+-        | None -> String.length body
++      let marker_at marker =
++        let rec find at =
++          match String.index_from_opt body at marker.[0] with
++          | Some found when found + String.length marker <= String.length body
++                            && String.sub body found (String.length marker) = marker -> Some found
++          | Some found -> find (found + 1)
++          | None -> None
++        in
++        find 0
++      in
++      let at =
++        [marker_at "export"; marker_at "form"; marker_at "term"]
++        |> List.filter_map Fun.id |> List.sort Int.compare
++        |> function first :: _ -> first | [] -> String.length body
+       in
+-      let at = find 0 in
+-      String.sub body 0 at ^ String.concat "\n" (List.rev linked_forms)
++      String.sub body 0 at ^ String.concat "\n" linked_forms
+         ^ "\n" ^ String.sub body at (String.length body - at)
+ 
+ let feed_at input =
+@@ -364,7 +397,7 @@ let one schedule epoch project (root : C_proj.root) =
+   match source project root.path with
+   | None -> Error (Root root.path)
+   | Some source ->
+-    let body = linked_body project source in
++    let body = linked_body project [] source in
+     let* image =
+       if String.equal root.feed "" then
+         match C_octb.compile body with
+
+diff --git a/lib/command/aml_cli.ml b/lib/command/aml_cli.ml
+index b3f4f09..a4ca1ae 100644
+--- a/lib/command/aml_cli.ml
++++ b/lib/command/aml_cli.ml
+@@ -279,32 +279,70 @@ let type_text typ =
+   | Ok value -> Octra_vm.C_type.text value
+   | Error _ -> "unknown"
+ 
+-let module_info_of_source command raw =
++let metadata_parse raw =
+   match Parse.parse raw with
++  | Ok parsed when Parse.diagnostics parsed = [] -> Ok parsed
++  | Ok _ | Error _ ->
++      let marker_at marker =
++        let rec find index =
++          match String.index_from_opt raw index marker.[0] with
++          | Some found when found + String.length marker <= String.length raw
++                            && String.sub raw found (String.length marker) = marker -> Some found
++          | Some found -> find (found + 1)
++          | None -> None
++        in
++        find 0
++      in
++      let first =
++        [marker_at "export"; marker_at "form"; marker_at "term"]
++        |> List.filter_map Fun.id |> List.sort Int.compare
++        |> function first :: _ -> first | [] -> String.length raw
++      in
++      Parse.parse (String.sub raw 0 first ^ "term 0\n}")
++
++let metadata_names marker raw =
++  let rec scan offset values =
++    match String.index_from_opt raw offset marker.[0] with
++    | None -> List.rev values
++    | Some found when found + String.length marker <= String.length raw
++                      && String.sub raw found (String.length marker) = marker ->
++        let first = found + String.length marker in
++        let rec finish index =
++          if index >= String.length raw then index else match raw.[index] with
++          | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> finish (index + 1)
++          | _ -> index
++        in
++        let last = finish first in
++        let values = if last = first then values else String.sub raw first (last - first) :: values in
++        scan last values
++    | Some found -> scan (found + 1) values
++  in
++  scan 0 []
++
++let module_info_of_source command raw =
++  match metadata_parse raw with
+   | Error error -> fail command (Parse.text error)
+   | Ok parsed ->
+-      begin
+-        match Parse.diagnostics parsed with
+-        | error :: _ -> fail command (Parse.text error)
+-        | [] ->
+-            let forms = Parse.forms parsed in
+-            let symbols =
+-              ("program", Octra_vm.C_syn.name_text (Parse.name parsed), "program")
+-              :: List.map (fun fn ->
+-              "form", Octra_vm.C_syn.name_text fn.Octra_vm.C_fun.name,
+-                type_text fn.arr.out) forms
+-            in
+-            let imports =
+-              List.map (fun item ->
+-                Parse.import_path item,
+-                Octra_vm.C_syn.name_text (Parse.import_alias item))
+-                (Parse.imports parsed)
+-            in
+-            let exports =
+-              List.map Octra_vm.C_syn.name_text (Parse.exports parsed)
+-            in
+-            symbols, imports, exports
+-      end
++      let forms = Parse.forms parsed in
++      let parsed_forms = List.map (fun fn ->
++          "form", Octra_vm.C_syn.name_text fn.Octra_vm.C_fun.name,
++            type_text fn.arr.out) forms in
++      let form_symbols = if parsed_forms = [] then
++          List.map (fun name -> "form", name, "unknown") (metadata_names "form " raw)
++        else parsed_forms in
++      let symbols =
++        ("program", Octra_vm.C_syn.name_text (Parse.name parsed), "program")
++        :: form_symbols
++      in
++      let imports =
++        List.map (fun item ->
++          Parse.import_path item,
++          Octra_vm.C_syn.name_text (Parse.import_alias item))
++          (Parse.imports parsed)
++      in
++      let exports = List.map Octra_vm.C_syn.name_text (Parse.exports parsed) in
++      let exports = if exports = [] then metadata_names "export form " raw else exports in
++      symbols, imports, exports
+ 
+ let symbols_of_source command raw =
+   let symbols, _, _ = module_info_of_source command raw in
+

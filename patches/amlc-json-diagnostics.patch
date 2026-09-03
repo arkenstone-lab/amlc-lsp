@@ -1,0 +1,176 @@
+diff --git a/lib/command/aml_cli.ml b/lib/command/aml_cli.ml
+index 2d6df94..dc87709 100644
+--- a/lib/command/aml_cli.ml
++++ b/lib/command/aml_cli.ml
+@@ -165,4 +165,87 @@ let check path feed_path =
+     (Parse.veil_count parsed)
+     (Octra_vm.C_nat.text (Parse.veil_depth parsed))
+ 
++let json_escape value =
++  let buffer = Buffer.create (String.length value + 8) in
++  String.iter
++    (function
++      | '"' -> Buffer.add_string buffer "\\\""
++      | '\\' -> Buffer.add_string buffer "\\\\"
++      | '\n' -> Buffer.add_string buffer "\\n"
++      | '\r' -> Buffer.add_string buffer "\\r"
++      | '\t' -> Buffer.add_string buffer "\\t"
++      | value -> Buffer.add_char buffer value)
++    value;
++  Buffer.contents buffer
++
++type source_range = { first : int; last : int }
++
++let mask_range source range =
++  let out = Bytes.of_string source in
++  for index = range.first to range.last - 1 do
++    if Bytes.get out index <> '\n' then Bytes.set out index ' '
++  done;
++  Bytes.unsafe_to_string out
++
++let form_ranges source =
++  match Octra_vm.C_lex.scan source with
++  | Error _ -> []
++  | Ok items ->
++      let close first last ranges = match first with None -> ranges | Some first -> { first; last } :: ranges in
++      let rec walk index depth first ranges =
++        if index = Array.length items then List.rev (close first (String.length source) ranges)
++        else
++          let item = items.(index) in
++          let token = item.Octra_vm.C_lex.tok in
++          match token with
++          | Octra_vm.C_lex.Form when depth = 1 ->
++              walk (index + 1) depth (Some item.span.first.off) (close first item.span.first.off ranges)
++          | Octra_vm.C_lex.Term when depth = 1 ->
++              List.rev (close first item.span.first.off ranges)
++          | Octra_vm.C_lex.Lbrace -> walk (index + 1) (depth + 1) first ranges
++          | Octra_vm.C_lex.Rbrace -> walk (index + 1) (depth - 1) first ranges
++          | _ -> walk (index + 1) depth first ranges
++      in
++      walk 0 0 None []
++
++let parse_with_form_recovery source =
++  let rec collect source ranges errors =
++    match Parse.parse source with
++    | Ok parsed -> List.rev errors, Some parsed
++    | Error error ->
++        match List.find_opt (fun range -> range.first <= error.span.first.off && error.span.first.off <= range.last) ranges with
++        | Some range -> collect (mask_range source range) (List.filter (fun item -> item <> range) ranges) (error :: errors)
++        | None -> List.rev (error :: errors), None
++  in
++  collect source (form_ranges source) []
++
++let check_json path =
++  let emit (span : Octra_vm.C_lex.span) message =
++    Printf.printf
++      "{\"message\":\"%s\",\"severity\":\"error\",\"start\":{\"line\":%d,\"column\":%d,\"offset\":%d},\"end\":{\"line\":%d,\"column\":%d,\"offset\":%d}}\n%!"
++      (json_escape message) span.first.line span.first.col span.first.off
++      span.last.line span.last.col span.last.off
++  in
++  let raw = source path in
++  match Octra_vm.C_lex.diagnostics raw with
++  | _ :: _ as errors ->
++      List.iter (fun error -> emit error.Octra_vm.C_lex.span (Octra_vm.C_lex.text error)) errors;
++      exit 1
++  | [] ->
++      let errors, parsed = parse_with_form_recovery raw in
++      if errors <> [] then begin
++        List.iter (fun error -> emit error.Parse.span (Parse.text error)) errors;
++        exit 1
++      end;
++      match parsed with
++      | None -> failwith "parser recovery lost a successful parse"
++      | Some parsed ->
++          begin
++            match Parse.diagnostics parsed with
++            | [] -> ()
++            | errors ->
++                List.iter (fun error -> emit error.Parse.span (Parse.text error)) errors;
++                exit 1
++          end
++
+ let build_as command input output feed_path =
+diff --git a/lib/command/amlc_cli.ml b/lib/command/amlc_cli.ml
+index 48e8b92..a3e0514 100644
+--- a/lib/command/amlc_cli.ml
++++ b/lib/command/amlc_cli.ml
+@@ -160,5 +160,7 @@ let rec input_args command req = function
+ 
+ let check path args =
+   let info = stat "check" path in
+-  if info.st_kind = Unix.S_DIR || String.equal (Filename.extension path) ".amlp"
++  if info.st_kind = Unix.S_REG && aml path && args = ["--diagnostics=json"] then
++    Aml_cli.check_json path
++  else if info.st_kind = Unix.S_DIR || String.equal (Filename.extension path) ".amlp"
+   then
+diff --git a/lib/aml/syntax/c_parse.ml b/lib/aml/syntax/c_parse.ml
+index 13daec6..191b1d9 100644
+--- a/lib/aml/syntax/c_parse.ml
++++ b/lib/aml/syntax/c_parse.ml
+@@ -2328,4 +2328,20 @@ let check program =
+   let* _, info = compile program in
+   Ok info
+ 
++let form_diagnostics program =
++  List.filter_map
++    (fun fn ->
++      match C_fun.def fn with
++      | Ok () -> None
++      | Error error -> Some { cause = Fun error; span = form_error_span program fn error })
++    program.fns
++
++let diagnostics program =
++  match form_diagnostics program with
++  | _ :: _ as errors -> errors
++  | [] ->
++      begin
++        match compile program with Ok _ -> [] | Error error -> [error]
++      end
++
+ let source src =
+diff --git a/lib/aml/syntax/c_parse.mli b/lib/aml/syntax/c_parse.mli
+index 872c6b0..fd6c12c 100644
+--- a/lib/aml/syntax/c_parse.mli
++++ b/lib/aml/syntax/c_parse.mli
+@@ -81,4 +81,5 @@ val lower : t -> (C_low.prog, error) result
+ val lower : t -> (C_low.prog, error) result
+ val compile : t -> (C_low.prog * C_check.info, error) result
+ val check : t -> (C_check.info, error) result
++val diagnostics : t -> error list
+ val source : string -> (C_low.prog, error) result
+diff --git a/lib/aml/syntax/c_lex.ml b/lib/aml/syntax/c_lex.ml
+index 7c18dd2..dd01e66 100644
+--- a/lib/aml/syntax/c_lex.ml
++++ b/lib/aml/syntax/c_lex.ml
+@@ -742,4 +742,23 @@ let scan src =
+       | Ok (items, _) -> Ok items
+       | Error error -> Error error
+ 
++let mask src span =
++  let out = Bytes.of_string src in
++  let first = max 0 span.first.off in
++  let last = min (Bytes.length out) span.last.off in
++  for index = first to last - 1 do
++    if Bytes.get out index <> '\n' then Bytes.set out index ' '
++  done;
++  Bytes.unsafe_to_string out
++
++let diagnostics src =
++  let rec collect source errors =
++    match scan source with
++    | Ok _ -> List.rev errors
++    | Error error when error.span.last.off > error.span.first.off ->
++        collect (mask source error.span) (error :: errors)
++    | Error error -> List.rev (error :: errors)
++  in
++  collect src []
++
+ let text error =
+diff --git a/lib/aml/syntax/c_lex.mli b/lib/aml/syntax/c_lex.mli
+index 32c5485..dd141c1 100644
+--- a/lib/aml/syntax/c_lex.mli
++++ b/lib/aml/syntax/c_lex.mli
+@@ -243,2 +243,3 @@ type error = {
+ 
+ val scan : string -> (item array, error) result
++val diagnostics : string -> error list

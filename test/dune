@@ -1,0 +1,10 @@
+(test
+ (name protocol_test)
+ (libraries amlc_lsp yojson))
+
+(rule
+ (alias runtest)
+ (deps neovim_smoke.lua %{exe:../bin/amlc_lsp.exe})
+ (action
+  (run nvim --headless -u NONE -i NONE --noplugin -l %{dep:neovim_smoke.lua}
+   %{exe:../bin/amlc_lsp.exe})))

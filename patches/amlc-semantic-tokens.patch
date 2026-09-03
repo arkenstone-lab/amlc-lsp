@@ -1,0 +1,49 @@
+diff --git a/lib/command/aml_cli.ml b/lib/command/aml_cli.ml
+--- a/lib/command/aml_cli.ml
++++ b/lib/command/aml_cli.ml
+@@ -392,5 +392,35 @@
+ let symbols_of_source command raw =
+   let symbols, _, _ = module_info_of_source command raw in
+   symbols
++
++let semantic_token_kind form_names items index =
++  let item = items.(index) in
++  let next = if index + 1 < Array.length items then Some items.(index + 1).Lex.tok else None in
++  match item.Lex.tok, next with
++  | Lex.Form, _ -> Some "keyword"
++  | Lex.Ident name, Some Lex.Lparen when List.mem name form_names -> Some "function"
++  | Lex.Ident name, _ when index > 0 && items.(index - 1).Lex.tok = Lex.Form && List.mem name form_names -> Some "function"
++  | (Lex.Unit | Lex.Bool | Lex.Int | Lex.Bytes | Lex.Vec), _ -> Some "type"
++  | Lex.Text _, _ -> Some "string"
++  | (Lex.Nat _ | Lex.Hex _), _ -> Some "number"
++  | (Lex.Plus | Lex.Minus | Lex.Star | Lex.Slash | Lex.Percent | Lex.Eq | Lex.Lt | Lex.Le | Lex.Gt | Lex.Ge | Lex.Arrow | Lex.Thin | Lex.Bar), _ -> Some "operator"
++  | (Lex.Lbrace | Lex.Rbrace | Lex.Lparen | Lex.Rparen | Lex.Lbrack | Lex.Rbrack | Lex.Colon | Lex.Comma | Lex.Eof), _ -> None
++  | Lex.Ident _, _ -> Some "variable"
++  | _ -> Some "keyword"
++
++let emit_semantic_tokens raw symbols =
++  match Lex.scan raw with
++  | Error _ -> ()
++  | Ok items ->
++      let form_names = symbols |> List.filter_map (fun (kind, name, _, _) -> if String.equal kind "form" then Some name else None) in
++      Printf.printf ",\"semanticTokens\":[";
++      let first = ref true in
++      Array.iteri (fun index (item : Lex.item) -> match semantic_token_kind form_names items index with
++        | None -> ()
++        | Some kind ->
++            Printf.printf "%s{\"type\":\"%s\",\"range\":{\"start\":{\"line\":%d,\"column\":%d,\"offset\":%d},\"end\":{\"line\":%d,\"column\":%d,\"offset\":%d}}}"
++              (if !first then "" else ",") kind item.Lex.span.Lex.first.Lex.line item.Lex.span.Lex.first.Lex.col item.Lex.span.Lex.first.Lex.off item.Lex.span.Lex.last.Lex.line item.Lex.span.Lex.last.Lex.col item.Lex.span.Lex.last.Lex.off;
++            first := false) items;
++      Printf.printf "]"
+ 
+ let emit_symbols ?raw symbols =
+@@ -436,6 +466,8 @@
+   in
+   Printf.printf "{\"version\":2,\"symbols\":[";
+   List.iteri (fun index symbol -> emit (if index = 0 then "" else ",") symbol) symbols;
+-  Printf.printf "]}"
++  Printf.printf "]";
++  Option.iter (fun raw -> emit_semantic_tokens raw symbols) raw;
++  Printf.printf "}"
+ 
+ let symbols_json path =

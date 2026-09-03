@@ -1,0 +1,14 @@
+{
+  "name": "tree-sitter-aml",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for AML and Octra AppliedML",
+  "license": "BSD-3-Clause",
+  "private": true,
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "test": "sh test/tree-sitter-fixtures.sh"
+  },
+  "devDependencies": {
+    "tree-sitter-cli": "^0.25.10"
+  }
+}

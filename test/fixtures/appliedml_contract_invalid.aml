@@ -1,0 +1,5 @@
+contract Broken {
+  state {
+    owner address
+  }
+}

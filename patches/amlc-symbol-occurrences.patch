@@ -1,0 +1,69 @@
+diff --git a/lib/command/aml_cli.ml b/lib/command/aml_cli.ml
+index f32406f..fca8d1a 100644
+--- a/lib/command/aml_cli.ml
++++ b/lib/command/aml_cli.ml
+@@ -339,4 +339,24 @@ let selection_span raw kind name =
+       in
+       find 0
+ 
++(* A form name immediately followed by [()] is the compiler's direct-call
++   syntax.  We only emit spans for forms confirmed by [Parse.forms], avoiding
++   free identifiers and comments entirely. *)
++let occurrence_spans raw kind name =
++  if not (String.equal kind "form") then [] else
++  match Lex.scan raw with
++  | Error _ -> []
++  | Ok items ->
++      let rec collect found index =
++        if index + 1 >= Array.length items then List.rev found
++        else
++          match items.(index).Lex.tok, items.(index + 1).Lex.tok with
++          | Lex.Form, Lex.Ident found_name when String.equal found_name name ->
++              collect (("declaration", items.(index + 1).Lex.span) :: found) (index + 1)
++          | Lex.Ident found_name, Lex.Lparen when String.equal found_name name ->
++              collect (("reference", items.(index).Lex.span) :: found) (index + 1)
++          | _ -> collect found (index + 1)
++      in
++      collect [] 0
++
+ let module_info_of_source command raw =
+@@ -371,7 +389,7 @@ let symbols_of_source command raw =
+   let symbols, _, _ = module_info_of_source command raw in
+   symbols
+ 
+-let emit_symbols symbols =
++let emit_symbols ?raw symbols =
+   let program =
+     match symbols with
+     | ("program", name, _, _) :: _ -> name
+@@ -392,6 +410,22 @@ let emit_symbols symbols =
+         emit_position span.Lex.last;
+         Printf.printf "}"
+     end;
++    begin match raw with
++    | None -> ()
++    | Some raw ->
++        let occurrences = occurrence_spans raw kind name in
++        if occurrences <> [] then begin
++          Printf.printf ",\"occurrences\":[";
++          List.iteri (fun index (role, span) ->
++            Printf.printf "%s{\"role\":\"%s\",\"range\":{\"start\":"
++              (if index = 0 then "" else ",") role;
++            emit_position span.Lex.first;
++            Printf.printf ",\"end\":";
++            emit_position span.Lex.last;
++            Printf.printf "}}") occurrences;
++          Printf.printf "]"
++        end
++    end;
+     Printf.printf "}"
+   in
+   Printf.printf "{\"version\":2,\"symbols\":[";
+@@ -405,5 +434,6 @@ let emit_symbols symbols =
+   Printf.printf "]}"
+ 
+ let symbols_json path =
+-  emit_symbols (symbols_of_source "check" (source path));
++  let raw = source path in
++  emit_symbols ~raw (symbols_of_source "check" raw);
+   Printf.printf "\n%!"

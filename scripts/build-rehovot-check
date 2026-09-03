@@ -1,0 +1,35 @@
+#!/usr/bin/env sh
+set -eu
+
+revision=c54167b827ede56b20d94608f8d3a9f5fa138c09
+prefix=${PREFIX:-"$HOME/.local"}
+workdir=$(mktemp -d "${TMPDIR:-/tmp}/rehovot-check.XXXXXX")
+
+cleanup() {
+  rm -rf "$workdir"
+}
+trap cleanup EXIT HUP INT TERM
+
+command -v git >/dev/null || { echo "git is required" >&2; exit 1; }
+command -v dune >/dev/null || { echo "dune is required" >&2; exit 1; }
+command -v ocamlfind >/dev/null || { echo "ocamlfind is required; run: opam install zarith yojson dune" >&2; exit 1; }
+ocamlfind query zarith >/dev/null 2>&1 || { echo "zarith is required; install pkg-config and gmp first, then run: opam install zarith yojson dune" >&2; exit 1; }
+ocamlfind query yojson >/dev/null 2>&1 || { echo "yojson is required; run: opam install zarith yojson dune" >&2; exit 1; }
+
+git init -q "$workdir/lite_node"
+git -C "$workdir/lite_node" remote add origin https://github.com/octra-labs/lite_node.git
+git -C "$workdir/lite_node" fetch -q --depth 1 origin "$revision"
+git -C "$workdir/lite_node" checkout -q --detach FETCH_HEAD
+
+mkdir -p "$workdir/source"
+cp rehovot/dune rehovot/dune-project rehovot/rehovot_check.ml "$workdir/source/"
+cp "$workdir/lite_node/lib/vm/compiler/oct_lang.ml" "$workdir/source/"
+cp "$workdir/lite_node/lib/vm/compiler/oct_lex.ml" "$workdir/source/"
+cp "$workdir/lite_node/lib/vm/compiler/oct_parse.ml" "$workdir/source/"
+cp "$workdir/lite_node/lib/vm/compiler/aml_verify.ml" "$workdir/source/"
+cp "$workdir/lite_node/lib/vm/runtime/program_limits.ml" "$workdir/source/"
+
+(cd "$workdir/source" && dune build rehovot_check.exe)
+mkdir -p "$prefix/bin"
+install -m 755 "$workdir/source/_build/default/rehovot_check.exe" "$prefix/bin/rehovot-check"
+printf '%s\n' "installed $prefix/bin/rehovot-check from Lite Node $revision"

@@ -1,0 +1,4 @@
+(lang dune 3.0)
+(name rehovot_check)
+(package
+ (name rehovot_check))

@@ -1,0 +1,18 @@
+contract Token {
+  invariant supply_conserved = sum(balances) == total_supply
+  state {
+    owner: address
+    total_supply: u128
+    balances: map[address]u128
+  }
+  event Transfer(from: address, to: address, amount: u128)
+  constructor(supply: u128) { self.owner = origin }
+  private fn safe_add(left: u128, right: u128): u128 { return left + right }
+  view fn balance_of(addr: address): u128 { return self.balances[addr] }
+  fn transfer(to: address, amount: u128): bool {
+    let next = safe_add(self.balances[to], amount)
+    self.balances[to] = next
+    emit Transfer(caller, to, amount)
+    return true
+  }
+}
