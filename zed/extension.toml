@@ -1,6 +1,6 @@
 id = "aml"
 name = "AML"
-version = "0.1.0"
+version = "0.2.0"
 schema_version = 1
 authors = ["Christopher Choi <christopher@arkenstone-labs.com>"]
 description = "AML and Octra AppliedML support through amlc-lsp."
@@ -15,4 +15,4 @@ AML = "aml"
 
 [grammars.aml]
 repository = "https://github.com/arkenstone-lab/amlc-lsp"
-commit = "b8d0add3fd8f828860803c82a8d74891febf2997"
+commit = "305b9bfbd5755b0889675155bcb57878edb5b339"

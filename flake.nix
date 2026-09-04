@@ -67,7 +67,7 @@
           };
           amlcLsp = ocamlPackages.buildDunePackage {
             pname = "amlc-lsp";
-            version = "0.1.0";
+            version = "0.2.0";
             src = ./.;
             buildInputs = with ocamlPackages; [ yojson ];
             nativeBuildInputs = [ pkgs.makeWrapper ];

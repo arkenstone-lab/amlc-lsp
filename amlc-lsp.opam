@@ -1,5 +1,5 @@
 opam-version: "2.0"
-version: "0.1.0"
+version: "0.2.0"
 synopsis: "Language Server Protocol implementation for AML and AppliedML"
 description: "Compiler-backed diagnostics and editor assistance for AML and Octra AppliedML."
 maintainer: "Christopher Choi <christopher@arkenstone-labs.com>"

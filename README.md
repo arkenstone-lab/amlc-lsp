@@ -6,7 +6,7 @@ the Octra AppliedML contract dialect without using an RPC node.
 
 ## Install
 
-Until the first public release is published, install from a source checkout:
+Until the package is accepted into the OPAM repository, install from a source checkout:
 
 ```sh
 opam switch create . 4.14.2
@@ -14,7 +14,7 @@ eval "$(opam env)"
 opam install .
 ```
 
-The public package name will be `amlc-lsp`, installed with:
+Once the package is available from the OPAM repository, install it with:
 
 ```sh
 opam install amlc-lsp
