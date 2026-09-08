@@ -1,4 +1,5 @@
 _build/
+.DS_Store
 # Generated opam files are normally ignored.  The root package definition is
 # deliberately versioned for the non-Nix source-install path.
 *.opam
