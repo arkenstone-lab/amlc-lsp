@@ -31,6 +31,27 @@ jobs:
       - name: Build and test
         run: opam exec -- dune runtest
 
+  windows-opam:
+    name: Windows opam build and test (${{ matrix.windows_environment }})
+    strategy:
+      fail-fast: false
+      matrix:
+        windows_environment: [cygwin, msys2]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: 4.14.2
+          opam-local-packages: amlc-lsp.opam
+          windows-environment: ${{ matrix.windows_environment }}
+      - name: Validate package metadata
+        run: opam lint amlc-lsp.opam
+      - name: Install package
+        run: opam install . --with-test -y
+      - name: Build and test
+        run: opam exec -- dune runtest
+
   nix:
     name: Reproducible Nix build and test (${{ matrix.os }})
     strategy:
@@ -49,5 +70,7 @@ jobs:
         run: nix develop --command dune build @neovim-smoke
       - name: Validate Tree-sitter grammar
         run: nix develop --command sh test/tree-sitter-fixtures.sh
+      - name: Validate pinned Zed grammar and highlights
+        run: nix develop --command sh test/zed-grammar-pin.sh
       - name: Validate compiler contracts
         run: nix develop --command sh test/compiler-contract.sh

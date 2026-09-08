@@ -1,0 +1,3 @@
+program Unsafe {
+  public fn transfer(amount: int): int { return amount }
+}

@@ -1,20 +1,15 @@
 # Pinned AMLC compatibility patch
 
 The Nix package fetches AMLC at commit
-`b080a645d27a7f40369896d8bd1a85c377bea308` and applies the patches in this
-order:
+`db1080cae60e4ffbbfa31b3f94dfbd0a974573e9` and applies
+`patches/amlc-editor-interface.patch`.
 
-1. `patches/amlc-json-diagnostics.patch`
-2. `patches/amlc-term-recovery.patch`
-3. `patches/amlc-symbol-locations.patch`
-4. `patches/amlc-symbol-occurrences.patch`
-
-Together the patches add the JSON Lines diagnostics contract, declaration
-locations, and verified direct-form occurrences that this server requires.
-The recovery patch lets the compiler report multiple independent source errors
-in one editor check. Treat all four patches as a compatibility layer against
-that exact upstream commit; they are not an assertion that these flags exist in
-an unmodified AMLC release.
+The patch adds the JSON Lines diagnostics contract, declaration locations,
+verified direct-form occurrences, semantic tokens, and project metadata that
+this server requires. Its editor recovery entry point is separate from AMLC's
+strict parser, so the upstream parser and regression contracts remain intact.
+Treat it as a compatibility layer against that exact upstream commit; it is not
+an assertion that these flags exist in an unmodified AMLC release.
 
 When updating AMLC, rebase these changes in a dedicated fork, verify the
 compiler regression suite, regenerate the patches, then run:
@@ -24,5 +19,5 @@ dune runtest
 nix build .# # optional reproducible package check
 ```
 
-Do not edit generated patch context whitespace mechanically: unified-diff
+Do not edit generated patch context whitespace manually: unified-diff
 context may contain a required leading space on blank source lines.

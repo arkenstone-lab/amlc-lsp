@@ -1,0 +1,4 @@
+program Main {
+  public main(many left: int, many right: int) ->[many] int marks {} =
+    left + right
+}

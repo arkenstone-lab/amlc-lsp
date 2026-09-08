@@ -1,5 +1,5 @@
 opam-version: "2.0"
-version: "0.2.0"
+version: "0.2.1"
 synopsis: "Language Server Protocol implementation for AML and AppliedML"
 description: "Compiler-backed diagnostics and editor assistance for AML and Octra AppliedML."
 maintainer: "Christopher Choi <christopher@arkenstone-labs.com>"
@@ -11,7 +11,7 @@ dev-repo: "git+https://github.com/arkenstone-lab/amlc-lsp.git"
 depends: [
   "ocaml" {>= "4.14"}
   "dune" {>= "3.16"}
-  "yojson"
+  "yojson" {>= "1.6.0"}
 ]
 build: [
   ["dune" "build" "-p" name "-j" jobs]

@@ -1,0 +1,9 @@
+program Mixed {
+  form plus [many left: u128] (many right: u128) ->[many] u128 marks {}
+    under {steps[1000], depth[1000], work[1000]} =
+    left + right
+
+  public pure fn calculate(left: u128, right: u128): u128 {
+    return plus(left, right)
+  }
+}

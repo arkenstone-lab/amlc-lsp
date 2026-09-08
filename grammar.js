@@ -8,6 +8,7 @@ module.exports = grammar({
 
   extras: $ => [/[\s\uFEFF\u2060\u200B]/, $.comment],
   word: $ => $.identifier,
+  conflicts: $ => [[$.expression, $._atomic_type]],
 
   rules: {
     source_file: $ => repeat($._item),
@@ -22,7 +23,10 @@ module.exports = grammar({
       $.state_declaration,
       $.event_declaration,
       $.function_declaration,
-      $.legacy_form_declaration,
+      $.form_declaration,
+      $.main_declaration,
+      $.input_declaration,
+      $.permit_declaration,
       $.legacy_term_declaration,
       $.constructor_declaration,
       $.constant_declaration,
@@ -69,20 +73,43 @@ module.exports = grammar({
 
     function_declaration: $ => seq(
       repeat(choice("public", "private", "internal", "view", "pure", "payable", "nonreentrant", "export")),
-      choice("fn", "form"),
+      "fn",
       field("name", $.identifier),
       field("parameters", $.parameters),
       optional(seq(":", field("return_type", $.type))),
       choice(field("body", $.block), ";"),
     ),
 
-    // Preview AMLC declarations remain parseable for editor recovery. Their
-    // compiler routing is selected by amlc-lsp, not by this shared grammar.
-    legacy_form_declaration: $ => seq(
-      "form", field("name", $.identifier), "[", "]",
-      field("parameters", $.legacy_parameters), "->", "[", optional($.identifier), "]",
-      field("return_type", $.type), "marks", $.block, "=", $.expression,
+    form_declaration: $ => seq(
+      "form", field("name", $.identifier),
+      field("captures", $.form_captures),
+      "(", field("parameter", $.form_parameter), ")",
+      field("return", $.form_return),
+      "marks", field("marks", $.form_marks),
+      optional(field("limits", $.form_limits)),
+      "=", field("body", $.expression),
     ),
+    main_declaration: $ => seq(
+      "public", field("name", alias("main", $.identifier)),
+      "(", commaSep($.form_parameter), ")",
+      field("return", $.form_return),
+      "marks", field("marks", $.form_marks),
+      optional(field("limits", $.form_limits)),
+      "=", field("body", $.expression),
+    ),
+    form_captures: $ => seq("[", commaSep($.form_parameter), "]"),
+    form_parameter: $ => seq(field("multiplicity", choice("many", "once")), field("name", $.identifier), ":", field("type", $.type)),
+    form_return: $ => seq("->", "[", field("multiplicity", choice("many", "once")), "]", field("type", $.type)),
+    form_marks: $ => seq("{", commaSep($.form_mark), "}"),
+    form_mark: $ => seq(field("effect", choice("emit", "write", "read", "fail")), "[", $.number, "]", ":", field("target", $.identifier)),
+    form_limits: $ => seq("under", "{", $.form_limit_axis, ",", $.form_limit_axis, ",", $.form_limit_axis, "}"),
+    form_limit_axis: $ => seq(field("axis", choice("steps", "depth", "work")), "[", $.number, "]"),
+
+    input_declaration: $ => seq("input", field("binding", $.form_parameter)),
+    permit_declaration: $ => seq("permit", field("type", $.capability_type), "=", field("operation", $.identifier)),
+
+    // Calculation-oriented AMLC terms remain parseable beside callable Program
+    // syntax. Compiler routing is selected by amlc-lsp, not by this grammar.
     legacy_term_declaration: $ => seq("term", $.expression),
     legacy_parameters: $ => seq("(", commaSep($.legacy_parameter), ")"),
     legacy_parameter: $ => seq(optional(choice("many", "once")), field("name", $.identifier), ":", field("type", $.type)),
@@ -118,6 +145,16 @@ module.exports = grammar({
     expression_statement: $ => $.expression,
 
     expression: $ => choice(
+      $.let_expression,
+      $.if_expression,
+      $.split_expression,
+      $.orbit_expression,
+      $.equal_expression,
+      $.use_expression,
+      $.action_expression,
+      $.fold_expression,
+      $.generic_call_expression,
+      $.tuple_expression,
       $.identifier,
       $.self,
       $.literal,
@@ -130,6 +167,17 @@ module.exports = grammar({
       $.list,
       $.map,
     ),
+
+    let_expression: $ => prec.right(seq("let", $.form_parameter, "=", $.expression, "in", $.expression)),
+    if_expression: $ => prec.right(seq("if", $.expression, "then", $.expression, "else", $.expression)),
+    split_expression: $ => prec.right(seq("split", $.expression, "as", $.form_parameter, ",", $.form_parameter, "in", $.expression)),
+    orbit_expression: $ => prec.right(seq("orbit", "[", $.number, optional(seq(",", $.expression)), "]", "from", $.expression, "with", $.form_parameter, "=>", $.expression)),
+    equal_expression: $ => seq("equal", "[", $.type, "]", "(", $.expression, ",", $.expression, ")"),
+    use_expression: $ => prec.right(seq("use", field("function", $.identifier), "[", commaSep($.expression), "]", "(", $.expression, ")", "as", $.form_parameter, "in", $.expression)),
+    action_expression: $ => seq(field("effect", choice("emit", "write", "read", "fail")), "[", $.number, "]", "(", $.expression, ")"),
+    fold_expression: $ => prec.right(seq("fold", $.expression, "from", $.expression, "with", $.form_parameter, ",", $.form_parameter, "=>", $.expression)),
+    generic_call_expression: $ => prec.left(10, seq(field("function", $.identifier), "[", field("type", $.type), "]", field("arguments", $.arguments))),
+    tuple_expression: $ => seq("(", $.expression, repeat1(seq(",", $.expression)), optional(","), ")"),
 
     call_expression: $ => prec.left(10, seq(field("function", choice($.identifier, $.member_expression)), field("arguments", $.arguments))),
     arguments: $ => seq("(", commaSep($.expression), ")"),
@@ -150,10 +198,15 @@ module.exports = grammar({
     list: $ => seq("[", commaSep($.expression), "]"),
     map: $ => seq("{", commaSep(seq($.expression, ":", $.expression)), "}"),
 
-    type: $ => choice($.primitive_type, $.map_type, $.list_type, $.option_type, $.tuple_type, $.identifier),
-    primitive_type: $ => choice("int", "bool", "string", "address", "bytes", "bytes32", "u64", "u128", "u256", "uint", "cipher", "pubkey", "unit", "void"),
+    type: $ => choice($.product_type, $._atomic_type),
+    _atomic_type: $ => choice($.primitive_type, $.sized_type, $.map_type, $.list_type, $.sequence_type, $.capability_type, $.option_type, $.tuple_type, $.identifier),
+    product_type: $ => prec.right(1, seq($._atomic_type, repeat1(seq("*", $._atomic_type)))),
+    primitive_type: $ => choice("int", "bool", "string", "address", "bytes", "bytes32", "u64", "u128", "u256", "uint", "sint", "cipher", "pubkey", "unit", "void"),
+    sized_type: $ => prec(1, seq(choice("uint", "sint", "bytes"), "[", $.number, "]")),
     map_type: $ => seq("map", "[", $.type, "]", $.type),
     list_type: $ => seq(choice("list", "vec"), "[", $.type, "]"),
+    sequence_type: $ => seq(choice("seq", "vec"), "[", $.number, ",", $.type, "]"),
+    capability_type: $ => seq("cap", "[", $.number, "]"),
     option_type: $ => seq(choice("Option", "option"), "[", $.type, "]"),
     tuple_type: $ => seq("(", commaSep1($.type), ")"),
 
