@@ -15,13 +15,14 @@ let diagnostic_code message =
   else if starts_with "expected ," message then "REHOVOT105"
   else "REHOVOT100"
 
-let diagnostic ?(column = 1) ?(severity = "error") ?code line message =
+let diagnostic ?(column = 1) ?end_column ?(severity = "error") ?code line message =
+  let end_column = Option.value ~default:(column + 1) end_column in
   `Assoc [
     "message", `String message;
     "severity", `String severity;
     "code", `String (Option.value ~default:(diagnostic_code message) code);
     "start", position line column;
-    "end", position line (column + 1);
+    "end", position line end_column;
   ]
 
 let rec type_name = function
@@ -43,6 +44,21 @@ let parameters values =
 
 let function_signature fn =
   fn.Oct_lang.fn_name ^ "(" ^ parameters fn.fn_params ^ "): " ^ type_name fn.fn_ret
+
+let multiplicity = function
+  | Oct_lang.Once -> "once"
+  | Many -> "many"
+
+let form_parameters values =
+  values
+  |> List.map (fun parameter ->
+      multiplicity parameter.Oct_lang.fp_mult ^ " " ^ parameter.fp_name
+      ^ ": " ^ type_name parameter.fp_typ)
+  |> String.concat ", "
+
+let form_signature form =
+  form.Oct_lang.fm_name ^ "(" ^ form_parameters form.fm_params ^ ") ->["
+  ^ multiplicity form.fm_mult ^ "] " ^ type_name form.fm_ret
 
 let event_signature event =
   event.Oct_lang.ev_name ^ "(" ^
@@ -83,6 +99,10 @@ let declaration_span tokens kind name =
     | _ -> false
   in
   let rec find = function
+    | { token = TkIdent "form"; _ } :: ({ token = TkIdent found; span } :: _)
+      when String.equal kind "form" && String.equal found name -> Some span
+    | { token = TkPublic; _ } :: ({ token = TkIdent "main"; span } :: _)
+      when String.equal kind "form" && String.equal name "main" -> Some span
     | { token; _ } :: ({ token = TkIdent found; span } :: _) when declaration (kind, token)
         && String.equal found name -> Some span
     | _ :: rest -> find rest
@@ -91,8 +111,14 @@ let declaration_span tokens kind name =
   find tokens
 
 let symbol_occurrences tokens kind name =
-  if not (List.mem kind ["function"; "method"]) then [] else
+  if not (List.mem kind ["function"; "method"; "form"]) then [] else
   let rec collect found = function
+    | { token = TkIdent "form"; _ } :: ({ token = TkIdent declared; span } :: rest)
+      when String.equal kind "form" && String.equal declared name ->
+        collect (("declaration", span) :: found) rest
+    | { token = TkPublic; _ } :: ({ token = TkIdent "main"; span } :: rest)
+      when String.equal kind "form" && String.equal name "main" ->
+        collect (("declaration", span) :: found) rest
     | { token = TkFn; _ } :: ({ token = TkIdent declared; span } :: rest)
       when String.equal declared name -> collect (("declaration", span) :: found) rest
     | ({ token = TkIdent called; span } :: { token = TkLParen; _ } :: rest)
@@ -104,7 +130,7 @@ let symbol_occurrences tokens kind name =
 
 let lexical_token_type = function
   | TkTyInt | TkTyBool | TkTyString | TkTyAddress | TkTyBytes | TkTyBytes32
-  | TkTyU64 | TkTyU128 | TkTyU256 | TkTyCipher | TkTyPubKey | TkMap | TkTyList
+  | TkTyU64 | TkTyU128 | TkTyU256 | TkTyUint | TkTyCipher | TkTyPubKey | TkMap | TkTyList
   | TkOption -> Some "type"
   | TkIntLit _ -> Some "number"
   | TkStrLit _ -> Some "string"
@@ -113,11 +139,19 @@ let lexical_token_type = function
   | TkPlusEq | TkMinusEq | TkStarEq | TkSlashEq | TkDotDot -> Some "operator"
   | TkLBrace | TkRBrace | TkLParen | TkRParen | TkLBrack | TkRBrack | TkColon
   | TkComma | TkDot | TkNewline | TkEOF -> None
+  | TkIdent ("sint" | "seq" | "vec" | "cap") -> Some "type"
+  | TkIdent ("form" | "main" | "once" | "many" | "marks" | "under"
+    | "steps" | "depth" | "work" | "use" | "split" | "orbit" | "equal"
+    | "then" | "from" | "with" | "write" | "read" | "fail") -> Some "keyword"
   | TkIdent _ -> Some "variable"
   | _ -> Some "keyword"
 
 let semantic_tokens tokens function_names =
   let rec collect found = function
+    | { token = TkIdent "form"; span = keyword_span } ::
+      ({ token = TkIdent name; span } :: rest)
+      when List.mem name function_names ->
+        collect (("function", span) :: ("keyword", keyword_span) :: found) rest
     | { token = TkIdent name; span } :: { token = TkLParen; _ } :: rest
       when List.mem name function_names -> collect (("function", span) :: found) rest
     | { token = TkFn; _ } :: ({ token = TkIdent name; span } :: rest)
@@ -160,19 +194,52 @@ let symbols source contract =
   let events = List.map (fun event -> item ~signature:(event_signature event) "event" event.ev_name "event") contract.events in
   let functions = List.map (fun fn -> item ~signature:(function_signature fn) "function" fn.fn_name (type_name fn.fn_ret)) contract.funcs in
   let constructor = match contract.ctor with None -> [] | Some fn -> [item ~signature:(function_signature fn) "constructor" fn.fn_name (type_name fn.fn_ret)] in
-  let function_names = contract.funcs |> List.map (fun fn -> fn.fn_name) in
+  let forms = List.map (fun form ->
+    item ~signature:(form_signature form) "form" form.fm_name (type_name form.fm_ret)) contract.forms in
+  let function_names =
+    (contract.funcs |> List.map (fun fn -> fn.fn_name))
+    @ (contract.forms |> List.map (fun form -> form.fm_name))
+  in
   `Assoc [
     "version", `Int 2;
-    "symbols", `List (item declaration_kind contract.name declaration_kind :: structs @ enums @ constants @ interfaces @ fields @ events @ constructor @ functions);
+    "symbols", `List (item declaration_kind contract.name declaration_kind :: structs @ enums @ constants @ interfaces @ fields @ events @ constructor @ forms @ functions);
     "semanticTokens", `List (semantic_tokens tokens function_names |> List.map (fun (token_type, span) ->
       `Assoc ["type", `String token_type; "range", range span]));
   ]
 
-let verifier_diagnostics contract =
+let verifier_diagnostics source contract =
+  let tokens = source_tokens source in
+  let finding_span finding =
+    let name = match finding.Aml_verify.function_name with
+      | Some name -> Some name
+      | None ->
+          (match finding.state_field with
+           | Some name -> Some name
+           | None ->
+               (match finding.parameter with
+                | Some name -> Some name
+                | None -> Some contract.name))
+    in
+    match name with
+    | None -> None
+    | Some name ->
+        let rec find = function
+          | { token = TkIdent found; span } :: _ when String.equal found name ->
+              Some span
+          | _ :: rest -> find rest
+          | [] -> None
+        in
+        find tokens
+  in
   let report = Aml_verify.verify_ast contract in
   report.findings |> List.map (fun finding ->
     let severity = match finding.Aml_verify.severity with Aml_verify.Error -> "error" | Aml_verify.Warning -> "warning" in
-    diagnostic ~severity ~code:("REHOVOTV-" ^ finding.code) 1 finding.message)
+    match finding_span finding with
+    | Some span ->
+        diagnostic ~column:span.start_column ~end_column:span.end_column
+          ~severity ~code:("REHOVOTV-" ^ finding.code) span.start_line finding.message
+    | None ->
+        diagnostic ~severity ~code:("REHOVOTV-" ^ finding.code) 1 finding.message)
 
 let missing_import_diagnostics path contract =
   let directory = Filename.dirname path in
@@ -189,7 +256,7 @@ let check path json =
     let contract = Oct_parse.parse source in
     let import_diagnostics = missing_import_diagnostics path contract in
     if json then List.iter (fun item -> print_endline (to_string item))
-      (import_diagnostics @ verifier_diagnostics contract)
+      (import_diagnostics @ verifier_diagnostics source contract)
     else print_endline "ok";
     ignore (symbols source contract);
     if import_diagnostics = [] then 0 else 1
@@ -197,8 +264,8 @@ let check path json =
   | Oct_lex.LexError (message, line, column) ->
       if json then print_endline (to_string (diagnostic ~column line message)) else prerr_endline message;
       1
-  | Oct_parse.ParseError (message, line) ->
-      if json then print_endline (to_string (diagnostic line message)) else prerr_endline message;
+  | Oct_parse.ParseError (message, line, column) ->
+      if json then print_endline (to_string (diagnostic ~column line message)) else prerr_endline message;
       1
 
 let symbols_command path =
@@ -209,8 +276,8 @@ let symbols_command path =
   with
   | Oct_lex.LexError (message, line, column) ->
       print_endline (to_string (diagnostic ~column line message)); 1
-  | Oct_parse.ParseError (message, line) ->
-      print_endline (to_string (diagnostic line message)); 1
+  | Oct_parse.ParseError (message, line, column) ->
+      print_endline (to_string (diagnostic ~column line message)); 1
 
 let () =
   match Array.to_list Sys.argv with

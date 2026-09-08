@@ -20,20 +20,16 @@
             src = pkgs.fetchFromGitHub {
               owner = "octra-labs";
               repo = "amlc";
-              rev = "b080a645d27a7f40369896d8bd1a85c377bea308";
-              hash = "sha256-0wzRKVfs2PauYTu/iUSG8WV64cJil4KJ5oAd4Ieq4Ic=";
+              rev = "db1080cae60e4ffbbfa31b3f94dfbd0a974573e9";
+              hash = "sha256-rF5hDFhnmk/gJGPTN5OsKbR2Qea4CnHWuDEt1YMsi70=";
             };
             patches = [
-              ./patches/amlc-json-diagnostics.patch
-              ./patches/amlc-term-recovery.patch
-              ./patches/amlc-symbol-locations.patch
-              ./patches/amlc-symbol-occurrences.patch
-              ./patches/amlc-semantic-tokens.patch
+              ./patches/amlc-editor-interface.patch
             ];
           };
           amlc = ocamlPackages.buildDunePackage rec {
             pname = "amlc";
-            version = "0.1.0-preview-b080a645";
+            version = "0.1.0-preview-db1080c";
             src = amlcSrc;
             propagatedBuildInputs = with ocamlPackages; [ zarith base64 digestif ];
             doCheck = true;
@@ -41,23 +37,29 @@
           liteNodeSrc = pkgs.fetchFromGitHub {
             owner = "octra-labs";
             repo = "lite_node";
-            rev = "c54167b827ede56b20d94608f8d3a9f5fa138c09";
-            hash = "sha256-rPdmCJ6lS4iZiXI+OAJKFny4YhvhtBmjFNO+x/ImXKE=";
+            rev = "9e7ee19af38ba020497566ac73c268f42b20b9a4";
+            hash = "sha256-K4X5UJYGFaU4V1ydc7Yy23PvWFUkyhy1d/2xLN5nA6w=";
           };
           rehovotSrc = pkgs.runCommand "rehovot-check-source" {} ''
             mkdir -p "$out"
             cp ${./rehovot}/dune "$out/dune"
             cp ${./rehovot}/dune-project "$out/dune-project"
             cp ${./rehovot}/rehovot_check.ml "$out/rehovot_check.ml"
+            cp ${liteNodeSrc}/lib/vm/aml/core/c_rule.ml "$out/c_rule.ml"
+            cp ${liteNodeSrc}/lib/vm/aml/core/c_nat.ml "$out/c_nat.ml"
+            cp ${liteNodeSrc}/lib/vm/aml/core/c_limit.ml "$out/c_limit.ml"
+            cp ${liteNodeSrc}/lib/vm/aml/core/c_text.ml "$out/c_text.ml"
+            cp ${liteNodeSrc}/lib/vm/aml/analysis/c_eff.ml "$out/c_eff.ml"
             cp ${liteNodeSrc}/lib/vm/compiler/oct_lang.ml "$out/oct_lang.ml"
             cp ${liteNodeSrc}/lib/vm/compiler/oct_lex.ml "$out/oct_lex.ml"
+            cp ${liteNodeSrc}/lib/vm/compiler/oct_scope.ml "$out/oct_scope.ml"
             cp ${liteNodeSrc}/lib/vm/compiler/oct_parse.ml "$out/oct_parse.ml"
             cp ${liteNodeSrc}/lib/vm/compiler/aml_verify.ml "$out/aml_verify.ml"
             cp ${liteNodeSrc}/lib/vm/runtime/program_limits.ml "$out/program_limits.ml"
           '';
           rehovotCheck = ocamlPackages.buildDunePackage {
             pname = "rehovot_check";
-            version = "1.0-rehovot-c54167b";
+            version = "1.0-rehovot-9e7ee19";
             src = rehovotSrc;
             propagatedBuildInputs = with ocamlPackages; [ zarith yojson ];
             postInstall = ''
@@ -67,7 +69,7 @@
           };
           amlcLsp = ocamlPackages.buildDunePackage {
             pname = "amlc-lsp";
-            version = "0.2.0";
+            version = "0.2.1";
             src = ./.;
             buildInputs = with ocamlPackages; [ yojson ];
             nativeBuildInputs = [ pkgs.makeWrapper ];

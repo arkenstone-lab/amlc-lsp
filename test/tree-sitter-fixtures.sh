@@ -5,6 +5,10 @@ tree-sitter generate
 git diff --exit-code -- src/parser.c src/grammar.json src/node-types.json
 tree-sitter parse --quiet test/fixtures/appliedml_contract.aml
 tree-sitter parse --quiet test/fixtures/legacy_amlc.aml
+tree-sitter parse --quiet test/fixtures/aml_program_core.aml
+tree-sitter parse --quiet test/fixtures/aml_program_main.aml
+tree-sitter parse --quiet test/fixtures/aml_program_sort4.aml
+tree-sitter parse --quiet test/fixtures/aml_program_sequence.aml
 tree-sitter query --grammar-path . zed/languages/aml/highlights.scm \
   test/fixtures/appliedml_contract.aml >/dev/null
 

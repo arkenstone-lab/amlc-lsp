@@ -372,16 +372,18 @@ let has_line_start text prefixes =
       let line = String.trim line in
       List.exists (fun prefix -> starts_with prefix line) prefixes)
 
-(* [program] is accepted by both compilers.  Its body decides the route: the
-   preview language uses [form]/[term], while AppliedML uses [fn] and friends.
-   Checking legacy-only forms first prevents an old program from being sent to
-   Rehovot merely because both dialects share a declaration header. *)
+(* [program] and [form] are shared by the calculation-oriented AMLC language
+   and the callable Program syntax parsed by Rehovot.  Top-level calculation
+   declarations select AMLC; other Program declarations select Rehovot.  A
+   form-only AMLC source can force that route with [dialect = legacy]. *)
 let document_dialect text =
   match !dialect_override with
   | Some dialect -> dialect
   | None ->
       let code = source_code_mask text in
-      if has_line_start code ["form "; "term "] then Legacy_amlc
+      if has_line_start code ["term "; "input "; "permit "; "size ";
+                              "measure "; "law "; "data "; "shape "]
+      then Legacy_amlc
       else if has_line_start code ["contract "; "Contract "; "program "; "Program ";
                                    "interface "; "Interface "] then Appliedml
       else Legacy_amlc
@@ -1159,9 +1161,16 @@ let compiler_occurrence_at document line character =
                   else None) symbol.occurrences) symbols))
 
 let legacy_completion_keywords = [
-  "program"; "term"; "form"; "let"; "in"; "if"; "then"; "else";
-  "case"; "of"; "use"; "split"; "fold"; "every"; "any"; "count";
-  "total"; "true"; "false"; "unit"; "int"; "bool"; "bytes"; "vec";
+  "program"; "import"; "export"; "size"; "measure"; "law"; "input";
+  "term"; "form"; "kind"; "marks"; "under"; "steps"; "depth"; "work";
+  "data"; "shape"; "permit"; "tag"; "make"; "erase"; "once"; "many";
+  "let"; "in"; "if"; "then"; "else"; "case"; "of"; "use"; "split";
+  "fold"; "every"; "some"; "any"; "count"; "total"; "orbit"; "from";
+  "with"; "step"; "equal"; "fit"; "wide"; "length"; "read"; "write";
+  "emit"; "fail"; "cat"; "take"; "drop"; "vcat"; "at"; "uncons";
+  "close"; "max"; "abs"; "ok"; "err"; "fst"; "snd";
+  "true"; "false"; "unit"; "int"; "bool"; "bytes"; "vec"; "seq";
+  "sint"; "uint"; "cap"; "result"; "res";
 ]
 
 (* AppliedML spellings documented by Octra's current examples and cheatsheet.
@@ -1169,13 +1178,16 @@ let legacy_completion_keywords = [
    but are not presented as the default completion path. *)
 let appliedml_completion_keywords = [
   "program"; "contract"; "state"; "event"; "constructor";
-  "fn"; "view"; "pure"; "private"; "public"; "internal"; "payable";
+  "fn"; "form"; "main"; "view"; "pure"; "private"; "public"; "internal"; "payable";
   "const"; "return"; "assert"; "require"; "emit"; "while"; "for";
   "self"; "caller"; "origin"; "epoch"; "epoch_time"; "value"; "balance";
   "invariant"; "struct"; "enum"; "match"; "interface"; "implements";
   "import"; "error"; "revert"; "where"; "option";
   "unwrap"; "is_some"; "self_addr"; "tree_hash";
   "node_id"; "tx_hash"; "nonreentrant"; "log"; "indexed";
+  "once"; "many"; "marks"; "under"; "steps"; "depth"; "work";
+  "use"; "split"; "orbit"; "equal"; "then"; "from"; "with";
+  "write"; "read"; "fail";
 ]
 
 let completion_keywords = legacy_completion_keywords @ appliedml_completion_keywords
@@ -1189,13 +1201,13 @@ let completion_keywords_for text =
    Legacy [unit] and [vec] remain below solely for preview AMLC documents. *)
 let appliedml_types = [
   "int"; "bool"; "bytes"; "bytes32"; "string"; "address";
-  "u64"; "u128"; "u256"; "uint"; "cipher"; "pubkey";
-  "map"; "list"; "Option"; "option";
+  "u64"; "u128"; "u256"; "uint"; "sint"; "cipher"; "pubkey";
+  "map"; "list"; "seq"; "cap"; "Option"; "option";
 ]
 
 let aml_types = "unit" :: "vec" :: appliedml_types
 
-let completion_item ?(kind = 14) ?(detail = "AMLC") label =
+let completion_item ?(kind = 14) ?(detail = "AML") label =
   `Assoc [ ("label", `String label); ("kind", `Int kind); ("detail", `String detail) ]
 
 let symbol_completion_item (symbol : compiler_symbol) =

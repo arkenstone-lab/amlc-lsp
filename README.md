@@ -1,23 +1,24 @@
 # amlc-lsp
 
-`amlc-lsp` brings compiler-backed diagnostics and AML keyword completion to
-editors that support the Language Server Protocol. It supports legacy AML and
-the Octra AppliedML contract dialect without using an RPC node.
+`amlc-lsp` brings compiler-backed diagnostics and editor tooling to editors
+that support the Language Server Protocol. It supports preview AMLC sources,
+AppliedML contracts, and Octra's current AML Program core without using an RPC
+node.
 
 ## Install
 
-Until the package is accepted into the OPAM repository, install from a source checkout:
+Install the published package with:
+
+```sh
+opam install amlc-lsp
+```
+
+For development from a source checkout:
 
 ```sh
 opam switch create . 4.14.2
 eval "$(opam env)"
 opam install .
-```
-
-Once the package is available from the OPAM repository, install it with:
-
-```sh
-opam install amlc-lsp
 ```
 
 `amlc-lsp` requires a compatible `amlc` executable on `PATH`. Set
@@ -28,9 +29,10 @@ explicit diagnostic rather than guessing from human-readable compiler output.
 The server still starts when the executable is absent, but reports that
 compiler-backed AML diagnostics are unavailable.
 
-For offline AppliedML contract diagnostics, also provide `rehovot-check` on
-`PATH` or set `REHOVOT_CHECK=/absolute/path/to/rehovot-check`. The OPAM package
-does not bundle this checker. Build the pinned helper separately when needed:
+For offline AppliedML contract and callable Program diagnostics, also provide
+`rehovot-check` on `PATH` or set
+`REHOVOT_CHECK=/absolute/path/to/rehovot-check`. The OPAM package does not
+bundle this checker. Build the pinned helper separately when needed:
 
 ```sh
 # macOS: brew install pkg-config gmp
@@ -44,11 +46,12 @@ is not required for installation or editor use.
 
 ### Dialect routing
 
-By default the server detects legacy AMLC from `form`/`term` declarations and
-routes contracts, current `program` files, and interfaces to AppliedML's
-offline checker. Comments and strings do not affect that choice. For an
-ambiguous file or a workspace that deliberately uses one dialect, set the
-server dialect to `legacy`, `appliedml`, or `auto` (the default). Clients may
+By default the server routes calculation-oriented AML Program files containing
+top-level declarations such as `input`, `permit`, or `term` to AMLC. Contracts,
+interfaces, and callable `program` files use the Rehovot checker. Comments and
+strings do not affect that choice. For a form-only AMLC file, an ambiguous file,
+or a workspace that deliberately uses one dialect, set the server dialect to
+`legacy`, `appliedml`, or `auto` (the default). Clients may
 send it as `initializationOptions.dialect` or in
 `workspace/didChangeConfiguration` as `settings.amlcLsp.dialect`.
 
@@ -84,9 +87,11 @@ published extension; an extension-registry release is not published yet.
 - Compiler-backed diagnostics for AML files whose compiler implements the JSON
   diagnostics interface.
 - Push and pull diagnostics backed by the same compiler result cache.
-- Offline AppliedML contract diagnostics when `rehovot-check` is installed.
+- Offline AppliedML contract and callable Program diagnostics when
+  `rehovot-check` is installed.
 - AML and AppliedML keyword completion, plus compiler-known declarations.
-- Document symbols for top-level declarations.
+- Document symbols for top-level declarations, including AML Program forms and
+  `public main`.
 - Hover and signature help for compiler-known declarations.
 - Definition lookup for compiler-known declarations with a compiler source range.
 - Declaration lookup for compiler-known declarations with a compiler source range.

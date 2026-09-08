@@ -1,5 +1,17 @@
 (executable
  (name rehovot_check)
  (public_name rehovot-check)
- (modules program_limits oct_lang oct_lex oct_parse aml_verify rehovot_check)
+ (modules
+  c_rule
+  c_nat
+  c_limit
+  c_text
+  c_eff
+  program_limits
+  oct_lang
+  oct_lex
+  oct_scope
+  oct_parse
+  aml_verify
+  rehovot_check)
  (libraries zarith yojson))

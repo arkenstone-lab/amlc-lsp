@@ -75,8 +75,15 @@ let test_dialect_routing_and_completion () =
   Amlc_lsp.set_dialect_override None;
   expect (Amlc_lsp.document_dialect legacy = Amlc_lsp.Legacy_amlc)
     "legacy program was routed to AppliedML";
+  expect (Amlc_lsp.document_dialect "program Batch {\n  input once xs: seq[4, int]\n}" = Amlc_lsp.Legacy_amlc)
+    "AML Program input was routed to Rehovot";
   expect (Amlc_lsp.document_dialect applied = Amlc_lsp.Appliedml)
     "AppliedML contract was routed to preview AMLC";
+  let program_core =
+    "program Mixed {\n  form plus [many left: int] (many right: int) ->[many] int marks {} = left + right\n}"
+  in
+  expect (Amlc_lsp.document_dialect program_core = Amlc_lsp.Appliedml)
+    "AML Program core form was routed to preview AMLC";
   expect (List.mem "contract" (Amlc_lsp.completion_keywords_for applied))
     "AppliedML completion omitted contract";
   expect (List.mem "option" (Amlc_lsp.completion_keywords_for applied))
@@ -87,8 +94,18 @@ let test_dialect_routing_and_completion () =
     "AppliedML completion suggested legacy Contract spelling";
   expect (List.mem "form" (Amlc_lsp.completion_keywords_for legacy))
     "legacy completion omitted form";
-  expect (not (List.mem "form" (Amlc_lsp.completion_keywords_for applied)))
-    "AppliedML completion leaked legacy form";
+  expect (List.mem "input" (Amlc_lsp.completion_keywords_for legacy))
+    "AML Program completion omitted input";
+  expect (List.mem "uint" (Amlc_lsp.completion_keywords_for legacy))
+    "AML Program completion omitted sized integers";
+  expect (List.mem "fold" (Amlc_lsp.completion_keywords_for legacy))
+    "AML Program completion omitted fold";
+  expect (List.mem "form" (Amlc_lsp.completion_keywords_for program_core))
+    "AML Program completion omitted form";
+  expect (List.mem "many" (Amlc_lsp.completion_keywords_for program_core))
+    "AML Program completion omitted multiplicity";
+  expect (List.mem "orbit" (Amlc_lsp.completion_keywords_for program_core))
+    "AML Program completion omitted core expression";
   begin match Amlc_lsp.canonical_declaration_diagnostics "Contract Demo {}" with
   | [diagnostic] ->
       expect (diagnostic.code = "REHOVOT001" && diagnostic.severity = 2)

@@ -3,7 +3,7 @@
 ## AMLC
 
 The Nix package fetches, patches, and bundles AMLC from Octra Labs at commit
-`b080a645d27a7f40369896d8bd1a85c377bea308`. AMLC and the local patches derived
+`db1080cae60e4ffbbfa31b3f94dfbd0a974573e9`. AMLC and the local patch derived
 from it are subject to the following BSD 3-Clause notice.
 
 ```text
@@ -44,6 +44,6 @@ AMLC's inclusion does not imply endorsement by Octra Labs or its contributors.
 
 The `rehovot-check` package builds the lexer, parser, language model, and
 parser limits from Octra Labs' Lite Node commit
-`c54167b827ede56b20d94608f8d3a9f5fa138c09`. Those files carry the same BSD
+`9e7ee19af38ba020497566ac73c268f42b20b9a4`. Those files carry the same BSD
 3-Clause notice reproduced above. Their inclusion does not imply endorsement
 by Octra Labs or its contributors.
