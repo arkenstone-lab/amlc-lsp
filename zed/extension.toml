@@ -15,4 +15,4 @@ AML = "aml"
 
 [grammars.aml]
 repository = "https://github.com/arkenstone-lab/amlc-lsp"
-commit = "b8d0add3fd8f828860803c82a8d74891febf2997"
+commit = "9c9774600f9966a739bbc08a53a0e73a1ea213ac"
