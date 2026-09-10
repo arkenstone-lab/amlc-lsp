@@ -1,17 +1,17 @@
 id = "aml"
-name = "AML"
-version = "0.2.1"
+name = "AppliedML"
+version = "0.3.0"
 schema_version = 1
 authors = ["Christopher Choi <christopher@arkenstone-labs.com>"]
-description = "AML and Octra AppliedML support through amlc-lsp."
+description = "Applied Meta Language (AppliedML) support through amlc-lsp."
 repository = "https://github.com/arkenstone-lab/amlc-lsp"
 
 [language_servers.amlc-lsp]
 name = "AMLC Language Server"
-language = "AML"
+language = "AppliedML"
 
 [language_servers.amlc-lsp.language_ids]
-AML = "aml"
+AppliedML = "aml"
 
 [grammars.aml]
 repository = "https://github.com/arkenstone-lab/amlc-lsp"

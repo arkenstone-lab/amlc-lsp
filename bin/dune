@@ -1,4 +1,5 @@
 (executable
  (name amlc_lsp)
  (public_name amlc-lsp)
+ (enabled_if (= %{profile} legacy))
  (libraries amlc_lsp))

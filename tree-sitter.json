@@ -10,9 +10,9 @@
     }
   ],
   "metadata": {
-    "version": "0.1.0",
+    "version": "0.3.0",
     "license": "BSD-3-Clause",
-    "description": "Tree-sitter grammar for AML and Octra AppliedML",
+    "description": "Tree-sitter grammar for Applied Meta Language (AppliedML)",
     "authors": [{ "name": "AMLC LSP Contributors" }]
   },
   "bindings": {

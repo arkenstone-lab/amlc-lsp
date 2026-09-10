@@ -1,8 +1,8 @@
 /// <reference types="tree-sitter-cli/dsl" />
 
-// AML and AppliedML share the .aml extension. This grammar accepts documented
-// AppliedML spellings plus compiler compatibility aliases; dialect-specific
-// completion, diagnostics, and canonicalisation remain the LSP's job.
+// Applied Meta Language (AppliedML) uses the .aml extension. This grammar
+// accepts documented spellings plus compiler compatibility aliases;
+// dialect-specific completion, diagnostics, and canonicalisation remain the LSP's job.
 module.exports = grammar({
   name: "aml",
 

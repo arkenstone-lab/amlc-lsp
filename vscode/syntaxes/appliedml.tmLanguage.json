@@ -1,0 +1,78 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "AppliedML",
+  "scopeName": "source.appliedml",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#declarations" },
+    { "include": "#types" },
+    { "include": "#keywords" },
+    { "include": "#builtins" },
+    { "include": "#languageConstants" },
+    { "include": "#numbers" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.double-slash.appliedml", "match": "//.*$" },
+        {
+          "name": "comment.block.appliedml",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.appliedml",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "name": "constant.character.escape.appliedml", "match": "\\\\." }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(program|Program|contract|Contract|interface|struct|enum)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.appliedml" },
+            "2": { "name": "entity.name.type.appliedml" }
+          }
+        },
+        {
+          "match": "\\b(fn|form|event|invariant)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.appliedml" },
+            "2": { "name": "entity.name.function.appliedml" }
+          }
+        }
+      ]
+    },
+    "types": {
+      "name": "storage.type.appliedml",
+      "match": "\\b(int|bool|string|address|bytes|bytes32|u64|u128|u256|uint|sint|cipher|pubkey|unit|void|map|list|vec|seq|cap|Option|option)\\b"
+    },
+    "keywords": {
+      "name": "keyword.control.appliedml",
+      "match": "\\b(import|from|as|implements|state|const|constructor|main|input|permit|term|public|private|internal|view|pure|payable|nonreentrant|export|let|var|return|assert|require|emit|revert|if|else|while|for|in|match|once|many|marks|under|steps|depth|work|use|split|orbit|equal|then|with|write|read|fail|fold|wide|close)\\b"
+    },
+    "builtins": {
+      "name": "support.function.builtin.appliedml",
+      "match": "\\b(self|caller|origin|self_addr|epoch|epoch_time|value|balance|tree_hash|node_id|tx_hash|unwrap|is_some|assert_address|len)\\b"
+    },
+    "languageConstants": {
+      "name": "constant.language.appliedml",
+      "match": "\\b(true|false|Some|some|None|none)\\b"
+    },
+    "numbers": {
+      "name": "constant.numeric.appliedml",
+      "match": "\\b(?:0x[0-9A-Fa-f]+|[0-9](?:[0-9_]*[0-9])?(?:\\.[0-9]+)?)\\b"
+    },
+    "operators": {
+      "name": "keyword.operator.appliedml",
+      "match": "(?:\\b(?:and|or|not)\\b|\\+=|-=|\\*=|/=|==|!=|<=|>=|&&|\\|\\||=>|->|[=+*/%<>!-])"
+    }
+  }
+}

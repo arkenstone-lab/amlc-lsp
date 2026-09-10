@@ -13,11 +13,4 @@ vim.api.nvim_create_autocmd("FileType", {
   end,
 })
 
-vim.lsp.config("amlc_lsp", {
-  cmd = { "amlc-lsp" },
-  filetypes = { "aml" },
-  root_markers = { "project.amlp", ".git" },
-  single_file_support = true,
-})
-
 vim.lsp.enable("amlc_lsp")

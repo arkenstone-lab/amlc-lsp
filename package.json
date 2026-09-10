@@ -1,7 +1,7 @@
 {
   "name": "tree-sitter-aml",
-  "version": "0.2.1",
-  "description": "Tree-sitter grammar for AML and Octra AppliedML",
+  "version": "0.3.0",
+  "description": "Tree-sitter grammar for Applied Meta Language (AppliedML)",
   "license": "BSD-3-Clause",
   "private": true,
   "scripts": {

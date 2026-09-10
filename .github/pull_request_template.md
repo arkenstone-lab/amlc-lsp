@@ -2,7 +2,7 @@
 
 ## Verification
 
-- [ ] `dune runtest`
+- [ ] `dune build @amlc_adapter/runtest @amlc_adapter/official-lsp-smoke @test/runtest`
 - [ ] README updated when user-visible behaviour changed
 - [ ] Grammar changes include `sh test/tree-sitter-fixtures.sh`
 - [ ] `nix build .#` run when the Nix package changed

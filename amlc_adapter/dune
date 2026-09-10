@@ -1,0 +1,41 @@
+(library
+ (name amlc_analysis)
+ (optional)
+ (modules amlc_analysis recovery members expression_uses call_contexts format_layout enum_symbols type_uses state_symbols workspace_index)
+ (libraries amlc.vm yojson unix))
+
+(executable
+ (name analysis_test)
+ (enabled_if (<> %{profile} legacy))
+ (modules analysis_test)
+ (libraries amlc_analysis amlc.vm))
+
+(executable
+ (name server)
+ (public_name amlc-lsp)
+ (enabled_if (<> %{profile} legacy))
+ (modules server)
+ (libraries amlc_analysis amlc_lsp))
+
+(install
+ (section doc)
+ (enabled_if (<> %{profile} legacy))
+ (files (README.md as official-amlc-adapter.md)))
+
+(rule
+ (alias runtest)
+ (enabled_if (<> %{profile} legacy))
+ (action (run ./analysis_test.exe)))
+
+(rule
+ (alias official-lsp-smoke)
+ (enabled_if (<> %{profile} legacy))
+ (deps server_test.py)
+ (action (run python3 %{dep:server_test.py} %{exe:server.exe})))
+
+(rule
+ (alias neovim-smoke)
+ (enabled_if (<> %{profile} legacy))
+ (deps neovim_test.lua)
+ (action (run nvim --headless -u NONE -i NONE --noplugin -l
+   %{dep:neovim_test.lua} %{exe:server.exe})))

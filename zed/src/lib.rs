@@ -1,3 +1,4 @@
+use zed_extension_api::settings::LspSettings;
 use zed_extension_api::{self as zed, Result};
 
 struct AmlExtension;
@@ -9,18 +10,29 @@ impl zed::Extension for AmlExtension {
 
     fn language_server_command(
         &mut self,
-        _language_server_id: &zed::LanguageServerId,
+        language_server_id: &zed::LanguageServerId,
         worktree: &zed::Worktree,
     ) -> Result<zed::Command> {
-        let command = worktree
-            .which("amlc-lsp")
-            .ok_or_else(|| "amlc-lsp was not found on PATH; install it with `opam install amlc-lsp` and ensure a compatible `amlc` is available".to_string())?;
+        let settings = LspSettings::for_worktree(language_server_id.as_ref(), worktree)?;
+        let command = settings
+            .binary
+            .as_ref()
+            .and_then(|binary| binary.path.clone())
+            .or_else(|| worktree.which("amlc-lsp"))
+            .ok_or_else(|| "amlc-lsp was not found; configure lsp.amlc-lsp.binary.path or follow https://github.com/arkenstone-lab/amlc-lsp#install-the-server".to_string())?;
+        let args = settings
+            .binary
+            .as_ref()
+            .and_then(|binary| binary.arguments.clone())
+            .unwrap_or_default();
+        let env = settings
+            .binary
+            .and_then(|binary| binary.env)
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
 
-        Ok(zed::Command {
-            command,
-            args: Vec::new(),
-            env: Default::default(),
-        })
+        Ok(zed::Command { command, args, env })
     }
 }
 

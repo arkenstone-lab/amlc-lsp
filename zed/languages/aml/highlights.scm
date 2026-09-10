@@ -81,6 +81,8 @@
 (string) @string
 (number) @number
 (boolean) @boolean
+((identifier) @constant
+  (#any-of? @constant "Some" "some" "None" "none"))
 
 [
   "="

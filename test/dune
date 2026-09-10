@@ -1,10 +1,21 @@
 (test
  (name protocol_test)
+ (enabled_if (<> %{os_type} Win32))
  (libraries amlc_lsp yojson))
 
 (rule
+ (alias runtest)
+ (enabled_if (<> %{os_type} Win32))
+ (deps legacy_installer_guard.sh ../scripts/build-rehovot-check)
+ (action (run sh %{dep:legacy_installer_guard.sh} %{dep:../scripts/build-rehovot-check})))
+
+(rule
  (alias neovim-smoke)
- (deps neovim_smoke.lua %{exe:../bin/amlc_lsp.exe})
+ (enabled_if (= %{profile} legacy))
+ (deps neovim_smoke.lua rename_smoke.lua %{exe:../bin/amlc_lsp.exe})
  (action
+  (progn
   (run nvim --headless -u NONE -i NONE --noplugin -l %{dep:neovim_smoke.lua}
-   %{exe:../bin/amlc_lsp.exe})))
+   %{exe:../bin/amlc_lsp.exe})
+  (run nvim --headless -u NONE -i NONE --noplugin -l %{dep:rename_smoke.lua}
+   %{exe:../bin/amlc_lsp.exe}))))

@@ -4,8 +4,15 @@ set -eu
 root_version=$(sed -n 's/^(version \(.*\))$/\1/p' dune-project)
 opam_version=$(sed -n 's/^version: "\(.*\)"$/\1/p' amlc-lsp.opam)
 grammar_version=$(sed -n 's/^  "version": "\(.*\)",$/\1/p' package.json | head -1)
+tree_sitter_version=$(sed -n 's/^[[:space:]]*"version": "\(.*\)",$/\1/p' tree-sitter.json | head -1)
 zed_extension_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' zed/extension.toml)
 zed_crate_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' zed/Cargo.toml | head -1)
+zed_lock_version=$(awk '
+  /^name = "zed-aml"$/ { in_crate = 1; next }
+  in_crate && /^version = / { gsub(/"/, "", $3); print $3; exit }
+' zed/Cargo.lock)
+vscode_extension_version=$(sed -n 's/^[[:space:]]*"version": "\([^"]*\)",$/\1/p' vscode/package.json | head -1)
+server_version=$(sed -n 's/.*("serverInfo".*("version", `String "\([^"]*\)").*/\1/p' lib/amlc_lsp.ml)
 nix_version=$(awk '
   /amlcLsp =/ { in_lsp = 1 }
   in_lsp && /^[[:space:]]*version = / {
@@ -14,13 +21,28 @@ nix_version=$(awk '
     exit
   }
 ' flake.nix)
+opam_amlc_rev=$(sed -n 's@.*amlc.git#\([0-9a-f][0-9a-f]*\)".*@\1@p' amlc-lsp.opam)
+nix_amlc_rev=$(awk '
+  /amlcSrc =/ { in_amlc = 1 }
+  in_amlc && /^[[:space:]]*rev = / {
+    match($0, /"[^"]+"/)
+    print substr($0, RSTART + 1, RLENGTH - 2)
+    exit
+  }
+' flake.nix)
 
 test -n "$root_version"
-for candidate in "$opam_version" "$grammar_version" "$zed_extension_version" "$zed_crate_version" "$nix_version"; do
+for candidate in "$opam_version" "$grammar_version" "$tree_sitter_version" "$zed_extension_version" "$zed_crate_version" "$zed_lock_version" "$vscode_extension_version" "$nix_version" "$server_version"; do
   test "$candidate" = "$root_version" || {
     printf 'version mismatch: expected %s, found %s\n' "$root_version" "$candidate" >&2
     exit 1
   }
 done
+
+test -n "$opam_amlc_rev"
+test "$opam_amlc_rev" = "$nix_amlc_rev" || {
+  printf 'AMLC revision mismatch: OPAM pins %s, Nix pins %s\n' "$opam_amlc_rev" "$nix_amlc_rev" >&2
+  exit 1
+}
 
 printf 'version %s is consistent across release manifests\n' "$root_version"

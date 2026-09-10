@@ -241,25 +241,46 @@ let verifier_diagnostics source contract =
     | None ->
         diagnostic ~severity ~code:("REHOVOTV-" ^ finding.code) 1 finding.message)
 
-let missing_import_diagnostics path contract =
-  let directory = Filename.dirname path in
-  contract.Oct_lang.imports
-  |> List.filter_map (fun import_ ->
-      let imported = Filename.concat directory import_.Oct_lang.imp_path in
-      if Sys.file_exists imported then None
-      else Some (diagnostic ~code:"REHOVOT201" 1
-        ("import file not found: " ^ import_.Oct_lang.imp_path)))
+let type_diagnostics resolve_scope source scope own =
+  let previous = !Oct_form_check.resolve_scope in
+  Fun.protect ~finally:(fun () -> Oct_form_check.resolve_scope := previous) (fun () ->
+  Oct_form_check.resolve_scope := resolve_scope;
+  let tokens = source_tokens source in
+  let check kind name run =
+    try run (); None with Oct_check.Invalid message ->
+      let line, column = match declaration_span tokens kind name with
+        | Some span -> span.start_line, span.start_column
+        | None -> 1, 1 in
+      Some (line, column, "REHOVOT301", message) in
+  let require = function Ok _ -> () | Error message -> raise (Oct_check.Invalid message) in
+  (* AML validates form bodies/resources; the source checker consumes their
+     declared call signatures when checking ordinary function bodies. *)
+  let function_scope = { scope with funcs = scope.funcs @ List.map Oct_form_check.lower scope.forms } in
+  List.filter_map (fun fn -> check "function" fn.fn_name (fun () ->
+    if scope.forms <> [] then require (Oct_form_check.check_func scope fn);
+    Oct_check.check_func function_scope fn)) own.funcs
+  @ List.filter_map (fun form -> check "form" form.fm_name (fun () ->
+      require (Oct_form_check.build scope [] [] form.fm_name))) own.forms
+  @ List.filter_map (fun item -> check "constant" item.c_name (fun () -> Oct_check.check_const function_scope item)) own.consts
+  @ (Option.to_list own.ctor |> List.filter_map (fun fn ->
+      check "constructor" "constructor" (fun () -> Oct_check.check_ctor function_scope fn))))
 
-let check path json =
+let import_diagnostics overlays path source =
+  Source_graph.validate ~check:type_diagnostics ~overlays ~path source
+  |> List.map (fun (line, column, code, message) -> diagnostic ~column ~code line message)
+
+let check ?(overlays = []) path json =
   let source = In_channel.with_open_bin path In_channel.input_all in
   try
     let contract = Oct_parse.parse source in
-    let import_diagnostics = missing_import_diagnostics path contract in
-    if json then List.iter (fun item -> print_endline (to_string item))
-      (import_diagnostics @ verifier_diagnostics source contract)
-    else print_endline "ok";
-    ignore (symbols source contract);
-    if import_diagnostics = [] then 0 else 1
+    (* Validate dependencies separately: their source positions and contract
+       state belong to those files, not to the importing document. *)
+    let import_diagnostics = import_diagnostics overlays path source in
+    let diagnostics = import_diagnostics @ verifier_diagnostics source contract in
+    if json then List.iter (fun item -> print_endline (to_string item)) diagnostics
+    else if diagnostics = [] then print_endline "ok"
+    else List.iter (fun item -> prerr_endline (Yojson.Safe.Util.member "message" item |> Yojson.Safe.Util.to_string)) diagnostics;
+    if List.exists (fun item -> Yojson.Safe.Util.member "severity" item = `String "error") diagnostics then 1 else 0
   with
   | Oct_lex.LexError (message, line, column) ->
       if json then print_endline (to_string (diagnostic ~column line message)) else prerr_endline message;
@@ -279,8 +300,52 @@ let symbols_command path =
   | Oct_parse.ParseError (message, line, column) ->
       print_endline (to_string (diagnostic ~column line message)); 1
 
+let read_overlays file =
+  Yojson.Safe.from_file file |> Yojson.Safe.Util.to_assoc
+  |> List.map (fun (path, text) -> path, Yojson.Safe.Util.to_string text)
+
+let analysis_metadata overlays path =
+  let source = In_channel.with_open_bin path In_channel.input_all in
+  let fields = try match symbols source (Oct_parse.parse source) with
+    | `Assoc fields -> fields | _ -> []
+    with Oct_parse.ParseError _ | Oct_lex.LexError _ -> [] in
+  print_endline (to_string (`Assoc (("dependencies", Source_graph.dependencies ~overlays ~path source) :: fields)))
+
 let () =
   match Array.to_list Sys.argv with
+  | [_; "check"; path; "--analysis-metadata=json"] -> analysis_metadata [] path
+  | [_; "check"; path; "--analysis-metadata=json"; "--overlays=json"; file] ->
+      analysis_metadata (read_overlays file) path
+  | _ :: "check" :: path :: (("--definition=json" | "--completion=json" | "--references=json" | "--rename=json") as query) :: offset :: options ->
+      let logical_path, options = match options with
+        | "--source-path" :: source_path :: rest -> source_path, rest
+        | _ -> path, options in
+      let roots, options = match options with
+        | "--workspace-roots=json" :: json :: rest ->
+            (Yojson.Safe.from_string json |> Yojson.Safe.Util.to_list
+              |> List.map Yojson.Safe.Util.to_string), rest
+        | _ -> [], options in
+      let replacement, options = match options with
+        | "--new-name" :: name :: rest -> Some name, rest
+        | _ -> None, options in
+      let overlays = match options with
+        | [] -> []
+        | ["--overlays=json"; file] ->
+            read_overlays file
+        | _ -> invalid_arg "editor query options" in
+      let source = In_channel.with_open_bin path In_channel.input_all in
+      if query = "--rename=json" then
+        print_endline (to_string (Editor_queries.rename ~overlays ~roots ?replacement ~path:logical_path source (int_of_string offset)))
+      else if query = "--references=json" then
+        print_endline (to_string (Editor_queries.references ~overlays ~roots ~path:logical_path source (int_of_string offset)))
+      else if query = "--definition=json" then
+        print_endline (to_string (Editor_queries.definition ~overlays ~path:logical_path source (int_of_string offset)))
+      else
+      let items = Editor_queries.complete ~overlays ~type_name ~path source (int_of_string offset) in
+      print_endline (to_string (`Assoc ["items", `List items;
+        "suppressFallback", `Bool (not (Editor_queries.in_code source (int_of_string offset)))]))
+  | [_; "check"; path; "--diagnostics=json"; "--overlays=json"; file] ->
+      exit (check ~overlays:(read_overlays file) path true)
   | [_; "check"; path; "--diagnostics=json"] -> exit (check path true)
   | [_; "check"; path; "--symbols=json"] -> exit (symbols_command path)
   | [_; "check"; path] -> exit (check path false)

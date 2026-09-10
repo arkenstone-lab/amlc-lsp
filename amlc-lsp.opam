@@ -1,7 +1,7 @@
 opam-version: "2.0"
-version: "0.2.1"
-synopsis: "Language Server Protocol implementation for AML and AppliedML"
-description: "Compiler-backed diagnostics and editor assistance for AML and Octra AppliedML."
+version: "0.3.0"
+synopsis: "Language server for Applied Meta Language (AppliedML)"
+description: "Compiler-backed diagnostics and editor assistance for Octra's AppliedML."
 maintainer: "Christopher Choi <christopher@arkenstone-labs.com>"
 authors: ["AMLC LSP Contributors"]
 license: "BSD-3-Clause"
@@ -9,13 +9,21 @@ homepage: "https://github.com/arkenstone-lab/amlc-lsp"
 bug-reports: "https://github.com/arkenstone-lab/amlc-lsp/issues"
 dev-repo: "git+https://github.com/arkenstone-lab/amlc-lsp.git"
 depends: [
-  "ocaml" {>= "4.14"}
+  "ocaml" {>= "4.14.2"}
   "dune" {>= "3.16"}
   "yojson" {>= "1.6.0"}
+  "amlc" {= "0.1.0~preview"}
+]
+pin-depends: [
+  [
+    "amlc.0.1.0~preview"
+    "git+https://github.com/octra-labs/amlc.git#db1080cae60e4ffbbfa31b3f94dfbd0a974573e9"
+  ]
 ]
 build: [
   ["dune" "build" "-p" name "-j" jobs]
+  ["dune" "build" "-p" name "@amlc_adapter/runtest" "@test/runtest"] {with-test}
 ]
 post-messages: [
-  "amlc-lsp is installed. For compiler-backed AML diagnostics, provide a compatible amlc executable on PATH (or set AMLC). For AppliedML diagnostics, provide rehovot-check on PATH (or set REHOVOT_CHECK)."
+  "amlc-lsp uses the official AMLC library supplied by the amlc dependency in this switch. No private compiler/helper is installed. See the adapter notes for current feature limits." {success}
 ]
