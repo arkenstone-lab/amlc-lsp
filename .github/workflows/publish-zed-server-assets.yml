@@ -1,0 +1,39 @@
+name: Publish Zed server assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing amlc-lsp server tag
+        required: true
+        default: v0.3.0
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/zed-server-assets.yml
+    with:
+      release_tag: ${{ inputs.release_tag }}
+    permissions:
+      contents: read
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: amlc-lsp-*
+          path: assets
+          merge-multiple: true
+      - name: Attach assets without replacing existing files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: gh release upload "$RELEASE_TAG" assets/* --repo "$REPOSITORY"

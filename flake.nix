@@ -88,6 +88,8 @@
                 "$out/share/nvim/site/plugin/amlc_lsp.lua"
               install -Dm644 nvim/lsp/amlc_lsp.lua \
                 "$out/share/nvim/site/lsp/amlc_lsp.lua"
+              install -Dm644 nvim/lua/amlc_lsp/opam.lua \
+                "$out/share/nvim/site/lua/amlc_lsp/opam.lua"
               install -Dm644 nvim/syntax/aml.vim \
                 "$out/share/nvim/site/syntax/aml.vim"
               install -Dm644 LICENSE "$out/share/doc/amlc-lsp/LICENSE"

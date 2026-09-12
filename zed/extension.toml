@@ -7,7 +7,7 @@ description = "Applied Meta Language (AppliedML) support through amlc-lsp."
 repository = "https://github.com/arkenstone-lab/amlc-lsp"
 
 [language_servers.amlc-lsp]
-name = "AMLC Language Server"
+name = "AppliedML Language Server"
 language = "AppliedML"
 
 [language_servers.amlc-lsp.language_ids]

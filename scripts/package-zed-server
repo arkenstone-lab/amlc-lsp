@@ -1,0 +1,93 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -ne 4 ]; then
+  echo "usage: $0 VERSION TARGET SERVER GMP_SOURCE" >&2
+  exit 2
+fi
+
+version=$1
+target=$2
+server=$3
+gmp_source=$4
+archive_dir="amlc-lsp-v${version}-${target}"
+stage="_build/zed-server-assets/${archive_dir}"
+case "$target" in
+  *-pc-windows-gnu)
+    executable=amlc-lsp.exe
+    output="_build/zed-server-assets/${archive_dir}.zip"
+    ;;
+  *)
+    executable=amlc-lsp
+    output="_build/zed-server-assets/${archive_dir}.tar.gz"
+    ;;
+esac
+
+test -x "$server"
+test -f "$gmp_source"
+mkdir -p "_build/zed-server-assets"
+rm -rf "$stage"
+mkdir -p "$stage/source"
+cp "$server" "$stage/$executable"
+cp LICENSE THIRD_PARTY_NOTICES.md "$stage/"
+cp "$gmp_source" "$stage/source/"
+if [ -n "${THIRD_PARTY_LICENSES:-}" ]; then
+  test -d "$THIRD_PARTY_LICENSES"
+  cp -R "$THIRD_PARTY_LICENSES" "$stage/licenses"
+fi
+chmod u+w "$stage/$executable"
+
+case "$target" in
+  *-apple-darwin)
+    gmp_library=$(otool -L "$stage/$executable" | awk '/libgmp.*\.dylib/ { print $1; exit }')
+    test -n "$gmp_library"
+    gmp_name=$(basename "$gmp_library")
+    cp "$gmp_library" "$stage/$gmp_name"
+    chmod u+w "$stage/$gmp_name"
+    install_name_tool -id "@loader_path/$gmp_name" "$stage/$gmp_name"
+    install_name_tool -change "$gmp_library" "@loader_path/$gmp_name" "$stage/$executable"
+    otool -L "$stage/$executable" | grep -F "@loader_path/$gmp_name" >/dev/null
+    ;;
+  *-unknown-linux-gnu)
+    command -v patchelf >/dev/null
+    gmp_library=$(ldd "$stage/$executable" | awk '/libgmp\.so/ { print $3; exit }')
+    test -n "$gmp_library"
+    cp "$gmp_library" "$stage/$(basename "$gmp_library")"
+    # The dynamic loader, rather than this shell, expands this token.
+    # shellcheck disable=SC2016
+    origin_rpath='$ORIGIN'
+    patchelf --set-rpath "$origin_rpath" "$stage/$executable"
+    patchelf --print-rpath "$stage/$executable" | grep -Fx "$origin_rpath" >/dev/null
+    ;;
+  *-pc-windows-gnu)
+    test -n "${GMP_LIBRARY:-}"
+    test -f "$GMP_LIBRARY"
+    cp "$GMP_LIBRARY" "$stage/"
+    command -v objdump >/dev/null
+    objdump -p "$stage/$executable" | awk '/DLL Name:/ { print $3 }' |
+      while IFS= read -r dependency; do
+        case "$dependency" in
+          lib*.dll|dll*.dll)
+            dependency_path=$(command -v "$dependency" || true)
+            test -n "$dependency_path"
+            cp "$dependency_path" "$stage/"
+            ;;
+        esac
+      done
+    ;;
+  *)
+    echo "unsupported release target: $target" >&2
+    exit 2
+    ;;
+esac
+
+python3 amlc_adapter/server_test.py "$stage/$executable"
+case "$target" in
+  *-pc-windows-gnu)
+    output=$(cd "$(dirname "$output")" && pwd)/$(basename "$output")
+    (cd "$stage" && python3 -m zipfile -c "$output" ./*)
+    output=$(cygpath -w "$output")
+    ;;
+  *) tar -C "$stage" -czf "$output" . ;;
+esac
+echo "$output"

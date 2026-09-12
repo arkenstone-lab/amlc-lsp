@@ -4,16 +4,26 @@ Language support for Applied Meta Language (AppliedML), powered by `amlc-lsp`.
 The extension recognizes `.aml` files, provides basic TextMate highlighting,
 and exposes the diagnostics and language features advertised by the server.
 
-## Requirement
+## Server setup
 
-Install `amlc-lsp` before using the extension. Follow the
-[server installation guide](https://github.com/arkenstone-lab/amlc-lsp#install-the-server)
-for the supported OPAM, Nix, and source-install paths. The extension does not
-download or bundle the compiler or language server.
+The extension starts `amlc-lsp` from `PATH` by default. If that fails, it checks
+the active OPAM switch for an existing server. When the switch already contains
+the compatible `amlc.0.1.0~preview` package but not the server, choose
+**Install with OPAM** in the notification or run **AppliedML: Install Language
+Server with OPAM**. After confirmation, the extension installs only
+`amlc-lsp.0.3.0` from its immutable release commit and reconnects
+automatically. It neither installs nor replaces AMLC.
 
-The extension searches `PATH` by default. If Visual Studio Code does not inherit
-the intended OPAM or Nix environment, set **AppliedML › Server: Path** to the
-absolute `amlc-lsp` executable. On Windows, select `amlc-lsp.exe`.
+The installer requires OPAM and AMLC to be available in the same active switch.
+It stops with guidance when OPAM is unavailable, AMLC is absent, or the AMLC
+version is incompatible. Set **AppliedML › Opam: Path** if the OPAM executable
+is not named `opam` or is outside Visual Studio Code's `PATH`.
+
+Nix and manual server installations remain supported. Follow the
+[server installation guide](https://github.com/arkenstone-lab/amlc-lsp#install-the-server),
+then set **AppliedML › Server: Path** to the absolute `amlc-lsp` executable if
+Visual Studio Code cannot find it. On Windows, select `amlc-lsp.exe`. The
+extension does not bundle the compiler or language server.
 
 Use **AppliedML: Show Server Information** from the Command Palette to inspect
 the executable and connected version. The extension warns when the server uses
@@ -37,10 +47,12 @@ Exact behavior and cross-file limits are documented in the
 | `amlcLsp.server.path` | Absolute server path; empty searches `PATH` |
 | `amlcLsp.server.arguments` | Additional server arguments |
 | `amlcLsp.server.environment` | Environment variables added to the server process |
+| `amlcLsp.opam.path` | OPAM executable used to find or install the server |
 | `amlcLsp.dialect` | `auto`, `appliedml`, or `legacy` syntax selection |
 | `amlcLsp.trace.server` | LSP message tracing in the AppliedML output channel |
 
-Changes to the path, arguments, or environment restart the server automatically.
+Changes to the server or OPAM path, arguments, or environment restart the
+server automatically.
 The **AppliedML: Restart Language Server** command remains available for manual
 recovery.
 
