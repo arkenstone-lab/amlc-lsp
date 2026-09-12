@@ -32,12 +32,19 @@ nix_amlc_rev=$(awk '
 ' flake.nix)
 
 test -n "$root_version"
-for candidate in "$opam_version" "$grammar_version" "$tree_sitter_version" "$zed_extension_version" "$zed_crate_version" "$zed_lock_version" "$vscode_extension_version" "$nix_version" "$server_version"; do
+for candidate in "$opam_version" "$grammar_version" "$tree_sitter_version" "$zed_extension_version" "$zed_crate_version" "$zed_lock_version" "$nix_version" "$server_version"; do
   test "$candidate" = "$root_version" || {
     printf 'version mismatch: expected %s, found %s\n' "$root_version" "$candidate" >&2
     exit 1
   }
 done
+
+root_release_line=${root_version%.*}
+vscode_release_line=${vscode_extension_version%.*}
+test "$vscode_release_line" = "$root_release_line" || {
+  printf 'VS Code extension release-line mismatch: expected %s.x, found %s\n' "$root_release_line" "$vscode_extension_version" >&2
+  exit 1
+}
 
 test -n "$opam_amlc_rev"
 test "$opam_amlc_rev" = "$nix_amlc_rev" || {
@@ -45,4 +52,4 @@ test "$opam_amlc_rev" = "$nix_amlc_rev" || {
   exit 1
 }
 
-printf 'version %s is consistent across release manifests\n' "$root_version"
+printf 'server manifests use %s; VS Code extension %s is compatible\n' "$root_version" "$vscode_extension_version"

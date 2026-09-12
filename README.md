@@ -115,15 +115,20 @@ OPAM constraint of exactly 4.14.2 still applies to OPAM installations.
 
 ### Visual Studio Code
 
-Install and compile the development extension, then launch an Extension
-Development Host from the checkout:
+Install **AppliedML LSP** from the
+[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=arkenstone-labs.appliedml)
+or [Open VSX](https://open-vsx.org/extension/arkenstone-labs/appliedml). For
+Visual Studio Code, it can also be installed from the command line:
 
 ```sh
-cd vscode
-npm ci
-npm run compile
-code --extensionDevelopmentPath="$PWD"
+code --install-extension arkenstone-labs.appliedml
 ```
+
+For a manual installation, download `appliedml-lsp-0.3.1.vsix` from the
+[v0.3.0 release](https://github.com/arkenstone-lab/amlc-lsp/releases/tag/v0.3.0)
+and run **Extensions: Install from VSIX**. The Visual Studio Code client is
+versioned independently at the patch level and does not bundle the server or
+compiler.
 
 The extension uses `amlc-lsp` from PATH by default. If VS Code does not inherit
 the selected OPAM or Nix environment, set `amlcLsp.server.path` to the absolute
@@ -131,7 +136,7 @@ server executable. Server launch setting changes restart the client
 automatically. **AppliedML: Show Server Information** reports the active path
 and version, and the extension warns when the server is from a different
 major.minor release line. It also provides basic highlighting before semantic
-tokens arrive. This is not yet a Visual Studio Marketplace or Open VSX release.
+tokens arrive.
 
 ### Zed
 

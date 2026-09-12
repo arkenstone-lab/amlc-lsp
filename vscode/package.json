@@ -1,8 +1,8 @@
 {
   "name": "appliedml",
-  "displayName": "AppliedML",
-  "description": "Applied Meta Language support through amlc-lsp",
-  "version": "0.3.0",
+  "displayName": "AppliedML LSP",
+  "description": "Language Server Protocol support for Applied Meta Language (AppliedML), powered by amlc-lsp",
+  "version": "0.3.1",
   "publisher": "arkenstone-labs",
   "icon": "icon.png",
   "license": "SEE LICENSE IN LICENSE",

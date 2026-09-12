@@ -1,4 +1,4 @@
-# AppliedML for Visual Studio Code
+# AppliedML LSP for Visual Studio Code
 
 Language support for Applied Meta Language (AppliedML), powered by `amlc-lsp`.
 The extension recognizes `.aml` files, provides basic TextMate highlighting,

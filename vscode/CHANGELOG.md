@@ -1,5 +1,10 @@
 # Change Log
 
+## 0.3.1
+
+- Clarified the Marketplace name and description to identify the extension as
+  the AppliedML client for `amlc-lsp`.
+
 ## 0.3.0
 
 - Initial Visual Studio Code client for `amlc-lsp`.
