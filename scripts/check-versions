@@ -7,6 +7,7 @@ grammar_version=$(sed -n 's/^  "version": "\(.*\)",$/\1/p' package.json | head -
 tree_sitter_version=$(sed -n 's/^[[:space:]]*"version": "\(.*\)",$/\1/p' tree-sitter.json | head -1)
 zed_extension_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' zed/extension.toml)
 zed_crate_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' zed/Cargo.toml | head -1)
+zed_server_version=$(sed -n 's/^const SERVER_VERSION: &str = "\([^"]*\)";$/\1/p' zed/src/lib.rs)
 zed_lock_version=$(awk '
   /^name = "zed-aml"$/ { in_crate = 1; next }
   in_crate && /^version = / { gsub(/"/, "", $3); print $3; exit }
@@ -30,9 +31,16 @@ nix_amlc_rev=$(awk '
     exit
   }
 ' flake.nix)
+vscode_installer_package=$(sed -n 's/^const serverPackage = "\([^"]*\)";$/\1/p' vscode/src/opamInstaller.ts)
+nvim_installer_package=$(sed -n 's/^local server_package = "\([^"]*\)"$/\1/p' nvim/lua/amlc_lsp/opam.lua)
+vscode_installer_rev=$(sed -n 's@.*amlc-lsp.git#\([0-9a-f][0-9a-f]*\).*@\1@p' vscode/src/opamInstaller.ts)
+nvim_installer_rev=$(sed -n 's@.*amlc-lsp.git#\([0-9a-f][0-9a-f]*\).*@\1@p' nvim/lua/amlc_lsp/opam.lua)
+opam_amlc_version=$(sed -n 's/.*"amlc" {= "\([^"]*\)"}.*/\1/p' amlc-lsp.opam)
+vscode_installer_amlc=$(sed -n 's/^const requiredAmlcVersion = "\([^"]*\)";$/\1/p' vscode/src/opamInstaller.ts)
+nvim_installer_amlc=$(sed -n 's/^local required_amlc_version = "\([^"]*\)"$/\1/p' nvim/lua/amlc_lsp/opam.lua)
 
 test -n "$root_version"
-for candidate in "$opam_version" "$grammar_version" "$tree_sitter_version" "$zed_extension_version" "$zed_crate_version" "$zed_lock_version" "$nix_version" "$server_version"; do
+for candidate in "$opam_version" "$grammar_version" "$tree_sitter_version" "$zed_extension_version" "$zed_crate_version" "$zed_lock_version" "$zed_server_version" "$nix_version" "$server_version"; do
   test "$candidate" = "$root_version" || {
     printf 'version mismatch: expected %s, found %s\n' "$root_version" "$candidate" >&2
     exit 1
@@ -51,5 +59,24 @@ test "$opam_amlc_rev" = "$nix_amlc_rev" || {
   printf 'AMLC revision mismatch: OPAM pins %s, Nix pins %s\n' "$opam_amlc_rev" "$nix_amlc_rev" >&2
   exit 1
 }
+
+installer_package="amlc-lsp.$root_version"
+for candidate in "$vscode_installer_package" "$nvim_installer_package"; do
+  test "$candidate" = "$installer_package" || {
+    printf 'editor installer package mismatch: expected %s, found %s\n' "$installer_package" "$candidate" >&2
+    exit 1
+  }
+done
+test -n "$vscode_installer_rev"
+test "$vscode_installer_rev" = "$nvim_installer_rev" || {
+  printf 'editor installer source mismatch: VS Code uses %s, Neovim uses %s\n' "$vscode_installer_rev" "$nvim_installer_rev" >&2
+  exit 1
+}
+for candidate in "$vscode_installer_amlc" "$nvim_installer_amlc"; do
+  test "$candidate" = "$opam_amlc_version" || {
+    printf 'editor installer AMLC mismatch: expected %s, found %s\n' "$opam_amlc_version" "$candidate" >&2
+    exit 1
+  }
+done
 
 printf 'server manifests use %s; VS Code extension %s is compatible\n' "$root_version" "$vscode_extension_version"

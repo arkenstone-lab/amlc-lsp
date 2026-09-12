@@ -21,7 +21,8 @@
   formatting, semantic tokens, folding and selection ranges.
 - Editor clients and setup guidance for Visual Studio Code, Zed, and Neovim
   0.11, including basic VS Code TextMate highlighting, server version reporting,
-  and automatic restart after launch-setting changes.
+  OPAM-aware server discovery, and confirmed installation from Visual Studio
+  Code and Neovim without modifying AMLC.
 
 ### Fixed
 
@@ -41,7 +42,11 @@
   rename rejects every spelling reserved by the compiler.
 - Zed no longer receives duplicate automatic diagnostics.
 - Zed now honors configured language-server paths, arguments, and environment
-  variables before searching the worktree environment.
+  variables before searching the worktree environment. When no local server is
+  available, it installs a platform-matched server archive from the versioned
+  0.3.0 GitHub release without modifying AMLC or an OPAM switch.
+- Nix installations now include the Neovim OPAM integration module required by
+  the packaged runtime.
 - File URI handling, buffered JSON-RPC input, shutdown handling and server
   version reporting.
 

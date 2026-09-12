@@ -2,7 +2,7 @@
   "name": "appliedml",
   "displayName": "AppliedML LSP",
   "description": "Language Server Protocol support for Applied Meta Language (AppliedML), powered by amlc-lsp",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "arkenstone-labs",
   "icon": "icon.png",
   "license": "SEE LICENSE IN LICENSE",
@@ -80,6 +80,10 @@
       {
         "command": "appliedml.showServerInformation",
         "title": "AppliedML: Show Server Information"
+      },
+      {
+        "command": "appliedml.installServer",
+        "title": "AppliedML: Install Language Server with OPAM"
       }
     ],
     "configuration": {
@@ -108,6 +112,12 @@
           "default": {},
           "scope": "machine-overridable",
           "description": "Environment variables added when starting amlc-lsp."
+        },
+        "amlcLsp.opam.path": {
+          "type": "string",
+          "default": "opam",
+          "scope": "machine-overridable",
+          "description": "OPAM executable used by the optional language-server installer."
         },
         "amlcLsp.dialect": {
           "type": "string",
@@ -139,8 +149,9 @@
     "compile": "npm run check && esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=out/extension.js",
     "package": "npm run check && esbuild src/extension.ts --bundle --minify --platform=node --format=cjs --external:vscode --outfile=out/extension.js",
     "compile-tests": "tsc -p test/tsconfig.json",
+    "test:installer": "tsc -p test/unit/tsconfig.json && esbuild test/unit/opamInstaller.test.ts --bundle --platform=node --format=cjs --outfile=out-test/opamInstaller.test.js && node --test out-test/opamInstaller.test.js",
     "check": "tsc --noEmit -p .",
-    "test": "npm run compile && npm run compile-tests && node out-test/runTest.js"
+    "test": "npm run compile && npm run test:installer && npm run compile-tests && node out-test/runTest.js"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -55,8 +55,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip2
+      - name: Test extension command resolution
+        run: cargo test --manifest-path zed/Cargo.toml --locked
       - name: Build extension with locked dependencies
         run: cargo build --manifest-path zed/Cargo.toml --locked --target wasm32-wasip2 --target-dir _build/zed-target
+
+  zed-server-assets:
+    name: Verify downloadable Zed servers
+    if: ${{ github.event_name == 'pull_request' }}
+    uses: ./.github/workflows/zed-server-assets.yml
+    with:
+      release_tag: v0.3.0
+    permissions:
+      contents: read
 
   native-opam:
     name: Native opam build and test (${{ matrix.os }}, OCaml ${{ matrix.ocaml }})

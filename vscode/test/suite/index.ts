@@ -87,6 +87,7 @@ export async function run(): Promise<void> {
   const commands = await vscode.commands.getCommands(true);
   assert.ok(commands.includes("appliedml.restartServer"));
   assert.ok(commands.includes("appliedml.showServerInformation"));
+  assert.ok(commands.includes("appliedml.installServer"));
 
   await configuration.update(
     "server.arguments",

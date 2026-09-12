@@ -114,6 +114,13 @@ commit, allowing that exact SHA to qualify before tagging. Tags matching `v*`
 repeat the installation through the public tag URL and must match the package
 version. Publish the GitHub release only after those checks pass.
 
+To attach the standalone servers used by Zed, run **Publish Zed server assets**
+with the existing release tag. The workflow checks out that immutable tag,
+builds and smoke-tests the Linux x86_64/AArch64, macOS Intel/Apple Silicon, and
+Windows x86_64 archives, then attaches them to the release. It does not replace
+an existing asset with the same name, so investigate any collision instead of
+silently overwriting a published binary.
+
 Keep the legacy regression environment until the official adapter has shipped
 through at least one stable release and every failure unique to the legacy suite
 has equivalent official-library coverage. Real project fixtures must have clear

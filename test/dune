@@ -19,3 +19,15 @@
    %{exe:../bin/amlc_lsp.exe})
   (run nvim --headless -u NONE -i NONE --noplugin -l %{dep:rename_smoke.lua}
    %{exe:../bin/amlc_lsp.exe}))))
+
+(rule
+ (alias neovim-smoke)
+ (enabled_if (<> %{os_type} Win32))
+ (deps
+  neovim_opam_installer.lua
+  ../nvim/plugin/amlc_lsp.lua
+  ../nvim/lsp/amlc_lsp.lua
+  ../nvim/lua/amlc_lsp/opam.lua)
+ (action
+  (run nvim --headless -u NONE -i NONE --noplugin -l
+   %{dep:neovim_opam_installer.lua} %{dep:../nvim/plugin/amlc_lsp.lua})))

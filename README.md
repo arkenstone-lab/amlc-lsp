@@ -4,9 +4,12 @@ Compiler-backed diagnostics, completion, and code navigation for Applied Meta
 Language (AppliedML) in Visual Studio Code, Zed, and Neovim. Analysis runs
 locally; no RPC node is required.
 
-The 0.3.0 server links the official AMLC library supplied by a separate `amlc`
-package. OPAM source installs and Nix builds use this implementation. See the
-[implementation notes](amlc_adapter/README.md) for verified support and limits.
+The 0.3.0 server links the official AMLC library supplied at build time by a
+separate `amlc` package. OPAM source installs and Nix builds use this
+implementation. Prebuilt native server archives contain the resulting linked
+server and do not require an OPAM switch or an `amlc` executable at runtime.
+See the [implementation notes](amlc_adapter/README.md) for verified support and
+limits.
 
 ## Install the server
 
@@ -124,15 +127,23 @@ Visual Studio Code, it can also be installed from the command line:
 code --install-extension arkenstone-labs.appliedml
 ```
 
-For a manual installation, download `appliedml-lsp-0.3.1.vsix` from the
+For a manual installation, download `appliedml-lsp-0.3.2.vsix` from the
 [v0.3.0 release](https://github.com/arkenstone-lab/amlc-lsp/releases/tag/v0.3.0)
 and run **Extensions: Install from VSIX**. The Visual Studio Code client is
 versioned independently at the patch level and does not bundle the server or
 compiler.
 
-The extension uses `amlc-lsp` from PATH by default. If VS Code does not inherit
-the selected OPAM or Nix environment, set `amlcLsp.server.path` to the absolute
-server executable. Server launch setting changes restart the client
+The extension uses `amlc-lsp` from PATH by default. If that fails, it checks the
+active OPAM switch for an existing server. When the switch already contains
+`amlc.0.1.0~preview` but not `amlc-lsp`, choose **Install with OPAM** in the
+notification or run **AppliedML: Install Language Server with OPAM**. After
+confirmation, the extension installs only `amlc-lsp.0.3.0` from its immutable
+release commit. It does not install, replace, or repin AMLC. It then records the
+server's absolute path and reconnects automatically.
+
+Set `amlcLsp.opam.path` when the OPAM executable is not available as `opam`. Nix
+and other manual installations can instead set `amlcLsp.server.path` to the
+absolute server executable. Server launch setting changes restart the client
 automatically. **AppliedML: Show Server Information** reports the active path
 and version, and the extension warns when the server is from a different
 major.minor release line. It also provides basic highlighting before semantic
@@ -140,21 +151,32 @@ tokens arrive.
 
 ### Zed
 
-1. Make the installed server available to Zed, using the same shell environment
-   as the installation or the absolute-path setting below.
-2. Install Rust via rustup and make the extension build target available:
-   `rustup target add wasm32-wasip2`.
-3. Open Zed's command palette, run `zed: install dev extension`, and select
-   this checkout's **`zed/` directory**, which contains `extension.toml`.
-4. Open your AppliedML project folder and an `.aml` source file.
+Once the AppliedML extension is available in Zed's extension registry, install
+it from **zed: extensions**. The extension honors an explicitly configured
+server first, then an `amlc-lsp` executable already on `PATH`. Otherwise it
+downloads the matching 0.3.0 server release on macOS (Apple Silicon or Intel),
+Linux (AArch64 or x86_64), and x86_64 Windows. The archive includes the exact
+corresponding GMP source and third-party notices alongside the dynamically
+linked GMP library. macOS and Linux archives carry the upstream GMP source;
+the Windows archive carries the official MSYS2 6.3.0-2 source archive, including
+its packaging recipe and patches. The extension does not modify an OPAM switch
+or an AMLC installation.
 
-This is a development extension, not an extension-registry release. Rust is
-needed only to build the extension; the language server itself does not require
-it. Zed obtains the grammar build SDK automatically.
+To load this checkout as a development extension:
+
+1. Install Rust via rustup and make the extension build target available:
+   `rustup target add wasm32-wasip2`.
+2. Open Zed's command palette, run `zed: install dev extension`, and select
+   this checkout's **`zed/` directory**, which contains `extension.toml`.
+3. Open your AppliedML project folder and an `.aml` source file.
+
+The numbered steps load a development extension rather than the registry
+release. Rust is needed only for that development build; the language server
+itself does not require it. Zed obtains the grammar build SDK automatically.
 See [Zed's extension instructions](https://zed.dev/docs/extensions/developing-extensions).
 
-If Zed cannot find the intended server, merge this into the project's
-`.zed/settings.json`, replacing the example path:
+To force a particular local server, merge this into the project's
+`.zed/settings.json` and replace the example path:
 
 ```json
 {
@@ -175,21 +197,25 @@ for example `C:/path/to/amlc-lsp.exe`.
 
 ### Neovim 0.11+
 
-Install the server with OPAM or Nix as described above, then add this to
-`init.lua` (or a Lua module loaded by it). This uses Neovim's built-in LSP client;
-no LSP configuration plugin is required.
+The `nvim/` runtime in this repository provides the language configuration and
+OPAM integration. Add that directory to `runtimepath` from `init.lua`, replacing
+the example with the location of your checkout:
 
 ```lua
-vim.filetype.add({ extension = { aml = "aml" } })
-vim.lsp.config("amlc_lsp", {
-  cmd = { "amlc-lsp" }, -- or an absolute path to the server
-  init_options = { dialect = "auto" },
-  filetypes = { "aml" },
-  root_markers = { "project.amlp", ".git" },
-})
-vim.lsp.enable("amlc_lsp")
+vim.opt.runtimepath:prepend("/absolute/path/to/amlc-lsp/nvim")
 ```
 
+The runtime uses `amlc-lsp` from `PATH`, or `opam exec -- amlc-lsp` when only
+OPAM is visible. If the active or project-local switch already contains
+`amlc.0.1.0~preview` but not the server, run `:AmlcLspInstall`. Neovim asks for
+confirmation, installs `amlc-lsp.0.3.0` from the immutable release commit, and
+reconnects. The command refuses missing or incompatible AMLC and uses
+`--ignore-pin-depends`, so it never installs, replaces, or repins AMLC. Set
+`vim.g.amlc_lsp_opam_path` before adding the runtime when the OPAM executable
+has a nonstandard name or location.
+
+For a configuration without the repository runtime, install the server
+manually and use the built-in LSP snippet from `nvim/lsp/amlc_lsp.lua`.
 Open an `.aml` file and run `:checkhealth vim.lsp` to check the client
 connection.
 

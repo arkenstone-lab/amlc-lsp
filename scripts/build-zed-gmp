@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+curl --fail --location --retry 3 \
+  --output gmp-6.3.0.tar.xz \
+  https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz
+gmp_source="$PWD/gmp-6.3.0.tar.xz"
+gmp_sha256=a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
+if [[ "$RUNNER_OS" == macOS ]]; then
+  actual_sha256=$(shasum -a 256 gmp-6.3.0.tar.xz | awk '{print $1}' | tr -d '\r')
+else
+  actual_sha256=$(sha256sum gmp-6.3.0.tar.xz | awk '{print $1}' | tr -d '\r')
+fi
+test "$actual_sha256" = "$gmp_sha256"
+echo "Verified GMP 6.3.0 source checksum."
+if [[ "$RUNNER_OS" == Windows ]]; then
+  /c/Windows/System32/tar.exe -xf gmp-6.3.0.tar.xz
+else
+  tar -xf gmp-6.3.0.tar.xz
+fi
+test -f gmp-6.3.0/configure
+echo "Extracted GMP 6.3.0 source."
+
+gmp_prefix="$RUNNER_TEMP/amlc-lsp-gmp"
+# Release assets must run on CPUs older than the hosted runner.
+set -- --disable-assembly
+
+cd gmp-6.3.0
+./configure --prefix="$gmp_prefix" --enable-shared --disable-static \
+  "$@"
+make -j2
+make -j2 check
+make install
+
+{
+  echo "GMP_PREFIX=$gmp_prefix"
+  echo "CPPFLAGS=-I$gmp_prefix/include"
+  echo "LDFLAGS=-L$gmp_prefix/lib"
+  echo "PKG_CONFIG_PATH=$gmp_prefix/lib/pkgconfig"
+  echo "GMP_SOURCE=$gmp_source"
+} >> "$GITHUB_ENV"
+{
+  echo "$gmp_prefix/bin"
+  echo "$gmp_prefix/lib"
+} >> "$GITHUB_PATH"

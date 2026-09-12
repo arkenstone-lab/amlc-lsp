@@ -13,4 +13,5 @@ vim.api.nvim_create_autocmd("FileType", {
   end,
 })
 
+require("amlc_lsp.opam").setup()
 vim.lsp.enable("amlc_lsp")
