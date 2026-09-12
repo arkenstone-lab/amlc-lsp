@@ -1,8 +1,14 @@
 #!/usr/bin/env sh
 set -eu
 
+snapshot=$(mktemp -d "${TMPDIR:-/tmp}/amlc-lsp-tree-sitter.XXXXXX")
+trap 'rm -rf "$snapshot"' EXIT HUP INT TERM
+cp src/parser.c src/grammar.json src/node-types.json "$snapshot"
+
 tree-sitter generate
-git diff --exit-code -- src/parser.c src/grammar.json src/node-types.json
+cmp "$snapshot/parser.c" src/parser.c
+cmp "$snapshot/grammar.json" src/grammar.json
+cmp "$snapshot/node-types.json" src/node-types.json
 tree-sitter parse --quiet test/fixtures/appliedml_contract.aml
 tree-sitter parse --quiet test/fixtures/legacy_amlc.aml
 tree-sitter parse --quiet test/fixtures/aml_program_core.aml

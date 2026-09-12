@@ -2,9 +2,15 @@
 
 ## AMLC
 
-The Nix package fetches, patches, and bundles AMLC from Octra Labs at commit
-`db1080cae60e4ffbbfa31b3f94dfbd0a974573e9`. AMLC and the local patch derived
-from it are subject to the following BSD 3-Clause notice.
+The default LSP links against the unmodified `amlc.vm` library from the separate
+AMLC dependency. OPAM declares that dependency; Nix builds the official source
+at commit `db1080cae60e4ffbbfa31b3f94dfbd0a974573e9` without patches. The LSP
+package does not install a private AMLC executable or `rehovot-check` helper.
+Native linking can include AMLC code in the LSP binary, so its notice is retained.
+
+The explicitly selected legacy regression environment applies
+`amlc-editor-interface.patch`; this is not the default package build. AMLC and
+that derived patch are subject to the following BSD 3-Clause notice.
 
 ```text
 BSD 3-Clause License
@@ -40,10 +46,22 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 AMLC's inclusion does not imply endorsement by Octra Labs or its contributors.
 
-## Octra Lite Node Rehovot parser
+## Octra Lite Node compiler components
 
-The `rehovot-check` package builds the lexer, parser, language model, and
-parser limits from Octra Labs' Lite Node commit
-`9e7ee19af38ba020497566ac73c268f42b20b9a4`. Those files carry the same BSD
-3-Clause notice reproduced above. Their inclusion does not imply endorsement
-by Octra Labs or its contributors.
+`rehovot-check` reuses compiler components from Octra Labs' Lite Node commit
+`9e7ee19af38ba020497566ac73c268f42b20b9a4`: the language model, lexer, parser,
+scope resolver, type checker, form checker, verifier, AML core/checking modules,
+and runtime limits. These components are covered by the Octra Labs BSD
+3-Clause notice reproduced above; the helper is not an independently authored
+replacement for that compiler.
+
+The local `rehovot-form-types.patch` modifies the reused checking code.
+`scripts/prepare-form-check` extracts the form-checking portion and the runtime
+call-depth limit from their original modules. The CLI, import graph, and editor
+query integration are maintained in this repository. Reusing or modifying
+Octra Labs code does not transfer its copyright to this project's authors.
+
+These components belong to the legacy comparison tools, not the default
+library-backed LSP package. The separate Nix helper output and explicitly
+opted-in standalone helper installer include this notice too. Their inclusion
+does not imply endorsement by Octra Labs or its contributors.

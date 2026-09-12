@@ -1,0 +1,5 @@
+program Example {
+  public fn increment(n: int): int {
+    return n + 1
+  }
+}

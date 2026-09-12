@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+set -eu
+
+# Legacy regression build only, not the official AMLC dependency build.
+# Pinned Octra sources use [effect] as an identifier, reserved since OCaml 5.3.
+# Select the older keyword set without rewriting upstream code.
+case "$(ocamlc -version)" in
+  4.*|5.[012].*) ;;
+  *) export OCAMLPARAM="${OCAMLPARAM:-_},keywords=5.2" ;;
+esac
+exec dune build --root "$1" -j "${3:-2}" "$2"

@@ -1,0 +1,22 @@
+#!/usr/bin/env sh
+set -eu
+source_root=$1
+output_dir=$2
+
+# The pinned compiler keeps form checking and VM emission in one module.
+# Reuse its checking section verbatim, without linking the VM or copying
+# thousands of generated compiler lines into this repository.
+for module in analysis/c_check.ml analysis/c_eff.ml analysis/c_fin.ml analysis/c_orbit.ml core/c_limit.ml core/c_nat.ml core/c_rule.ml core/c_term.ml core/c_text.ml core/c_type.ml machine/c_low.ml syntax/c_fun.ml syntax/c_syn.ml; do
+  if ! test -f "$output_dir/$(basename "$module")"; then
+    cp "$source_root/lib/vm/aml/$module" "$output_dir/"
+  fi
+  cp "$source_root/lib/vm/aml/${module}i" "$output_dir/"
+done
+awk '
+  /^let evidence program value checked =/ { found = 1; exit }
+  { gsub(/Contract_vm.call_depth_max/, "Form_runtime_limits.call_depth_max"); print }
+  END { if (!found) exit 1 }
+' "$source_root/lib/vm/compiler/oct_form.ml" > "$output_dir/oct_form_check.ml"
+sed -n '/^let call_depth_max = [0-9][0-9]*$/p' \
+  "$source_root/lib/vm/runtime/contract_vm.ml" > "$output_dir/form_runtime_limits.ml"
+test "$(wc -l < "$output_dir/form_runtime_limits.ml")" -eq 1

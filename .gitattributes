@@ -1,3 +1,5 @@
+* text=auto eol=lf
 src/parser.c linguist-generated=true
 src/grammar.json linguist-generated=true
 src/node-types.json linguist-generated=true
+patches/rehovot-form-types.patch whitespace=-trailing-space

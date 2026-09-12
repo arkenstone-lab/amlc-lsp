@@ -1,8 +1,15 @@
 #!/usr/bin/env sh
 set -eu
 
+# Regression-only helper installer; never part of the LSP package installation.
+if [ "${AMLC_LSP_LEGACY_TOOLS:-}" != "1" ]; then
+  printf '%s\n' 'Legacy helper only. Set AMLC_LSP_LEGACY_TOOLS=1 and an explicit PREFIX to opt in.' >&2
+  exit 2
+fi
+: "${PREFIX:?Set PREFIX to a dedicated legacy test installation directory}"
+
 revision=9e7ee19af38ba020497566ac73c268f42b20b9a4
-prefix=${PREFIX:-"$HOME/.local"}
+prefix=$PREFIX
 workdir=$(mktemp -d "${TMPDIR:-/tmp}/rehovot-check.XXXXXX")
 
 cleanup() {
@@ -21,21 +28,10 @@ git -C "$workdir/lite_node" remote add origin https://github.com/octra-labs/lite
 git -C "$workdir/lite_node" fetch -q --depth 1 origin "$revision"
 git -C "$workdir/lite_node" checkout -q --detach FETCH_HEAD
 
-mkdir -p "$workdir/source"
-cp rehovot/dune rehovot/dune-project rehovot/rehovot_check.ml "$workdir/source/"
-cp "$workdir/lite_node/lib/vm/aml/core/c_rule.ml" "$workdir/source/"
-cp "$workdir/lite_node/lib/vm/aml/core/c_nat.ml" "$workdir/source/"
-cp "$workdir/lite_node/lib/vm/aml/core/c_limit.ml" "$workdir/source/"
-cp "$workdir/lite_node/lib/vm/aml/core/c_text.ml" "$workdir/source/"
-cp "$workdir/lite_node/lib/vm/aml/analysis/c_eff.ml" "$workdir/source/"
-cp "$workdir/lite_node/lib/vm/compiler/oct_lang.ml" "$workdir/source/"
-cp "$workdir/lite_node/lib/vm/compiler/oct_lex.ml" "$workdir/source/"
-cp "$workdir/lite_node/lib/vm/compiler/oct_scope.ml" "$workdir/source/"
-cp "$workdir/lite_node/lib/vm/compiler/oct_parse.ml" "$workdir/source/"
-cp "$workdir/lite_node/lib/vm/compiler/aml_verify.ml" "$workdir/source/"
-cp "$workdir/lite_node/lib/vm/runtime/program_limits.ml" "$workdir/source/"
-
-(cd "$workdir/source" && dune build rehovot_check.exe)
+sh scripts/prepare-rehovot "$workdir/lite_node" "$workdir/source"
+sh scripts/build-pinned-checker "$workdir/source" rehovot_check.exe
 mkdir -p "$prefix/bin"
 install -m 755 "$workdir/source/_build/default/rehovot_check.exe" "$prefix/bin/rehovot-check"
+mkdir -p "$prefix/share/doc/rehovot-check"
+install -m 644 LICENSE THIRD_PARTY_NOTICES.md "$prefix/share/doc/rehovot-check/"
 printf '%s\n' "installed $prefix/bin/rehovot-check from Lite Node $revision"

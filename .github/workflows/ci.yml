@@ -3,57 +3,113 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
 
 permissions:
   contents: read
 
 jobs:
-  native-opam:
-    name: Native opam build and test (${{ matrix.os }})
+  vscode-extension:
+    name: Visual Studio Code extension (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: vscode/package-lock.json
+      - name: Install locked dependencies
+        working-directory: vscode
+        run: npm ci
+      - name: Test extension on Linux
+        if: ${{ runner.os == 'Linux' }}
+        working-directory: vscode
+        run: xvfb-run -a npm test
+      - name: Test extension
+        if: ${{ runner.os != 'Linux' }}
+        working-directory: vscode
+        run: npm test
+      - name: Package VSIX
+        if: ${{ runner.os == 'Linux' }}
+        working-directory: vscode
+        run: npx --yes @vscode/vsce@3.9.2 package --no-dependencies --out appliedml.vsix
+      - name: Preserve VSIX for inspection
+        if: ${{ runner.os == 'Linux' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: appliedml-vsix
+          path: vscode/appliedml.vsix
+          if-no-files-found: error
+
+  zed-extension:
+    name: Zed extension build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+      - name: Build extension with locked dependencies
+        run: cargo build --manifest-path zed/Cargo.toml --locked --target wasm32-wasip2 --target-dir _build/zed-target
+
+  native-opam:
+    name: Native opam build and test (${{ matrix.os }}, OCaml ${{ matrix.ocaml }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-2022]
+        ocaml: [4.14.2]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: ocaml/setup-ocaml@v3
         with:
-          ocaml-compiler: 4.14.2
+          ocaml-compiler: ${{ matrix.ocaml }}
           opam-local-packages: amlc-lsp.opam
+          opam-pin: false
+          windows-compiler: mingw
+          windows-environment: cygwin
       - name: Validate package metadata
         run: |
           opam lint amlc-lsp.opam
           sh scripts/check-versions
-      - name: Install package
+      - name: Install package from checkout
+        if: ${{ github.event_name == 'pull_request' }}
+        # Installing the local source processes its Git-only AMLC dependency.
         run: opam install . --with-test -y
+      - name: Install package from public Git source
+        if: ${{ github.event_name == 'push' }}
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version: "\(.*\)"$/\1/p' amlc-lsp.opam)
+          target=$GITHUB_SHA
+          case "$GITHUB_REF" in
+            refs/tags/*)
+              test "v$version" = "$GITHUB_REF_NAME"
+              target=$GITHUB_REF_NAME
+              ;;
+          esac
+          opam pin add --with-test -y "amlc-lsp.$version" \
+            "git+https://github.com/${GITHUB_REPOSITORY}.git#$target"
       - name: Build and test
-        run: opam exec -- dune runtest
-
-  windows-opam:
-    name: Windows opam build and test (${{ matrix.windows_environment }})
-    strategy:
-      fail-fast: false
-      matrix:
-        windows_environment: [cygwin, msys2]
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ocaml/setup-ocaml@v3
-        with:
-          ocaml-compiler: 4.14.2
-          opam-local-packages: amlc-lsp.opam
-          windows-environment: ${{ matrix.windows_environment }}
-      - name: Validate package metadata
-        run: opam lint amlc-lsp.opam
-      - name: Install package
-        run: opam install . --with-test -y
-      - name: Build and test
-        run: opam exec -- dune runtest
+        if: ${{ runner.os != 'Windows' }}
+        run: opam exec -- dune build @amlc_adapter/runtest @amlc_adapter/official-lsp-smoke @test/runtest
+      - name: Build and test native Windows adapter
+        if: ${{ runner.os == 'Windows' }}
+        run: opam exec -- dune build @amlc_adapter/runtest @amlc_adapter/official-lsp-smoke
+      - name: Verify installed package
+        shell: bash
+        run: |
+          python3 amlc_adapter/install_test.py "$(opam var prefix)" --dependency-switch
 
   nix:
-    name: Reproducible Nix build and test (${{ matrix.os }})
+    name: Official AMLC Nix build and test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -65,12 +121,18 @@ jobs:
       - name: Build package
         run: nix build .#
       - name: Run tests
-        run: nix develop --command dune runtest
+        run: nix develop --command dune build @amlc_adapter/runtest @amlc_adapter/official-lsp-smoke @test/runtest
+      - name: Verify installed package
+        run: nix develop --command python3 amlc_adapter/install_test.py result --nix
       - name: Run Neovim smoke test
         run: nix develop --command dune build @neovim-smoke
+      - name: Run legacy Neovim regression test
+        run: nix develop .#legacy --command dune build --profile legacy @neovim-smoke
       - name: Validate Tree-sitter grammar
         run: nix develop --command sh test/tree-sitter-fixtures.sh
       - name: Validate pinned Zed grammar and highlights
         run: nix develop --command sh test/zed-grammar-pin.sh
       - name: Validate compiler contracts
-        run: nix develop --command sh test/compiler-contract.sh
+        run: nix develop .#legacy --command sh test/compiler-contract.sh
+      - name: Validate compiler editor queries
+        run: nix develop .#legacy --command python3 test/compiler-completion.py rehovot-check

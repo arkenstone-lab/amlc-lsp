@@ -9,9 +9,9 @@ module Jsonrpc = struct
         (try Some (int_of_string (String.trim value)) with Failure _ -> None)
     | _ -> None
 
-  let read_headers input =
+  let read_headers read_line =
     let rec loop length =
-      match input_line input with
+      match read_line () with
       | exception End_of_file -> None
       | "\r" | "" -> Some length
       | header ->
@@ -20,12 +20,34 @@ module Jsonrpc = struct
     in
     loop None
 
-  let read input =
-    match read_headers input with
+  let read_frame read_line read_exact =
+    match read_headers read_line with
     | None -> None
     | Some None -> failwith "message is missing Content-Length"
     | Some (Some length) when length < 0 -> failwith "message has a negative Content-Length"
-    | Some (Some length) -> Some (from_string (really_input_string input length))
+    | Some (Some length) -> Some (from_string (read_exact length))
+
+  let read input = read_frame (fun () -> input_line input) (really_input_string input)
+
+  let read_fd input =
+    (* Do not read ahead: select observes the descriptor, not OCaml's channel
+       buffer. Prefetching a second frame can leave it waiting indefinitely. *)
+    let read_exact length =
+      let bytes = Bytes.create length in
+      let rec fill offset =
+        if offset < length then
+          match Unix.read input bytes offset (length - offset) with
+          | 0 -> raise End_of_file
+          | count -> fill (offset + count)
+          | exception Unix.Unix_error (Unix.EINTR, _, _) -> fill offset in
+      fill 0; Bytes.to_string bytes in
+    let read_line () =
+      let line = Buffer.create 64 in
+      let rec loop () = match read_exact 1 with
+        | "\n" -> Buffer.contents line
+        | byte -> Buffer.add_string line byte; loop () in
+      loop () in
+    read_frame read_line read_exact
 
   let write output message =
     let body = to_string message in
@@ -41,9 +63,16 @@ type compiler_diagnostic = {
   end_position : position;
 }
 
-type document = { text : string; version : int option }
+type document = { uri : string; text : string; version : int option }
+
+(* Analysis depends on the source directory (relative imports), not just bytes.
+   Dialect changes clear analysis caches before rescheduling analysis. *)
+type analysis_key = string * string
+let document_key document = document.uri, document.text
 type diagnostic_job = {
   pid : int;
+  temporary_files : (string * string) option;
+  document : document;
   output : Unix.file_descr;
   buffer : Buffer.t;
   started_at : float;
@@ -58,6 +87,7 @@ type compiler_symbol = {
   signature : string option;
   selection_start : position option;
   selection_end : position option;
+  completion_scopes : (position * position) list;
   occurrences : (string * position * position) list;
 }
 type compiler_semantic_token = {
@@ -65,13 +95,24 @@ type compiler_semantic_token = {
   token_start : position;
   token_end : position;
 }
+type compiler_member_site = { member_start : position; member_end : position; member_items : Yojson.Safe.t list }
+type compiler_signature_site = { signature_start : position; signature_end : position; signature_help : Yojson.Safe.t }
 type document_analysis = {
   diagnostics : compiler_diagnostic list;
   symbols : compiler_symbol list;
   semantic_tokens : compiler_semantic_token list;
+  members : compiler_member_site list;
+  signatures : compiler_signature_site list;
+  formatting : (int * int * int) list option;
+  dependencies : string list option;
 }
+
+(* The official launcher supplies an in-process analyzer before initialization.
+   It still runs in the existing bounded worker, never in the transport loop. *)
+let library_analyzer : (string -> string -> document_analysis) option ref = ref None
+let library_workspace_analyzer :
+  (string -> string list -> (string * string) list -> string -> string -> int -> string option -> Yojson.Safe.t) option ref = ref None
 type project_import = { path : string; alias : string }
-type contract_import = { path : string; names : string list }
 type project_source = {
   path : string;
   dependencies : string list;
@@ -85,15 +126,31 @@ type project_index = { stamp : float; sources : project_source list }
 let documents : (string, document) Hashtbl.t = Hashtbl.create 16
 let pending_checks : (string, document * float) Hashtbl.t = Hashtbl.create 16
 let diagnostic_jobs : (string, diagnostic_job) Hashtbl.t = Hashtbl.create 16
-let diagnostic_cache : (string, compiler_diagnostic list) Hashtbl.t = Hashtbl.create 32
-let symbol_cache : (string, compiler_symbol list) Hashtbl.t = Hashtbl.create 32
-let semantic_token_cache : (string, compiler_semantic_token list) Hashtbl.t = Hashtbl.create 32
+let worker_temporary_files : (string * string) option ref = ref None
+let diagnostic_cache : (analysis_key, compiler_diagnostic list) Hashtbl.t = Hashtbl.create 32
+let symbol_cache : (analysis_key, compiler_symbol list) Hashtbl.t = Hashtbl.create 32
+let semantic_token_cache : (analysis_key, compiler_semantic_token list) Hashtbl.t = Hashtbl.create 32
+let member_cache : (analysis_key, compiler_member_site list) Hashtbl.t = Hashtbl.create 32
+let signature_cache : (analysis_key, compiler_signature_site list) Hashtbl.t = Hashtbl.create 32
+let formatting_cache : (analysis_key, (int * int * int) list option) Hashtbl.t = Hashtbl.create 32
 let project_symbol_cache : (string, project_index) Hashtbl.t = Hashtbl.create 8
+let document_dependencies : (string, string list option) Hashtbl.t = Hashtbl.create 32
 let workspace_roots : string list ref = ref []
+let supports_document_changes = ref false
 let debounce_seconds = 0.2
 let max_document_bytes = 1_000_000
 let compiler_timeout_seconds = 5.
 let analysis_timeout_seconds = (2. *. compiler_timeout_seconds) +. 0.5
+type dialect = Legacy_amlc | Appliedml
+type editor_request = {
+  request_id : Yojson.Safe.t; method_name : string; params : Yojson.Safe.t;
+  snapshot : document; dialect : dialect option; deadline : float;
+}
+let editor_requests : editor_request list ref = ref []
+(* Do not answer an analysis-backed request with an empty fallback while its
+   worker is still within the server's own deadline. *)
+let editor_wait_seconds = analysis_timeout_seconds
+let max_editor_requests = 64
 let max_compiler_output_bytes = 4_000_000
 
 exception Compiler_timeout of string
@@ -102,6 +159,25 @@ exception Compiler_output_limit of string
 let close_noerr descriptor =
   try Unix.close descriptor with Unix.Unix_error _ -> ()
 let max_cached_documents = 64
+let analysis_recency : analysis_key list ref = ref []
+
+let forget_analysis key =
+  Hashtbl.remove diagnostic_cache key;
+  Hashtbl.remove symbol_cache key;
+  Hashtbl.remove semantic_token_cache key;
+  Hashtbl.remove member_cache key;
+  Hashtbl.remove signature_cache key;
+  Hashtbl.remove formatting_cache key;
+  analysis_recency := List.filter ((<>) key) !analysis_recency
+
+let remember_analysis key =
+  analysis_recency := List.filter ((<>) key) !analysis_recency;
+  (* Evict one oldest snapshot across all feature caches. Clearing a full cache
+     erased unrelated fresh analysis when another worker finished afterwards. *)
+  if List.length !analysis_recency >= max_cached_documents then
+    Option.iter forget_analysis (List.nth_opt !analysis_recency (max_cached_documents - 1));
+  analysis_recency := key :: !analysis_recency
+
 let initialized = ref false
 let shutting_down = ref false
 
@@ -135,14 +211,14 @@ let contains text fragment =
   fragment_length = 0 || walk 0
 
 let diagnostic_code message =
-  if contains message "expected = ) actual =" then "AMLC101"
-  else if contains message "expected = } actual =" then "AMLC102"
-  else if contains message "expected = ] actual =" then "AMLC103"
-  else if contains message "expected = , actual =" then "AMLC104"
-  else if contains message "expected = in actual =" then "AMLC105"
-  else if contains message "expected = then actual =" then "AMLC106"
-  else if contains message "expected = else actual =" then "AMLC107"
-  else if contains message "expected = : actual =" then "AMLC108"
+  if contains message "expected = ) actual =" || starts_with "expected )," message then "AMLC101"
+  else if contains message "expected = } actual =" || starts_with "expected }," message then "AMLC102"
+  else if contains message "expected = ] actual =" || starts_with "expected ]," message then "AMLC103"
+  else if contains message "expected = , actual =" || starts_with "expected ,," message then "AMLC104"
+  else if contains message "expected = in actual =" || starts_with "expected in," message then "AMLC105"
+  else if contains message "expected = then actual =" || starts_with "expected then," message then "AMLC106"
+  else if contains message "expected = else actual =" || starts_with "expected else," message then "AMLC107"
+  else if contains message "expected = : actual =" || starts_with "expected :," message then "AMLC108"
   else if starts_with "line" message || starts_with "unexpected" message || starts_with "expected" message then "AMLC100"
   else "AMLC000"
 
@@ -158,6 +234,8 @@ let line_start text line =
   in
   walk 0 0
 
+(* LSP columns count UTF-16 code units; compiler offsets count UTF-8 bytes.
+   Keep conversion at range/edit boundaries, never use columns as byte indices. *)
 let byte_offset text line character =
   let start = line_start text line in
   let rec walk index units =
@@ -180,95 +258,12 @@ let word_at text line character =
   let finish = right offset in
   if finish > start then Some (String.sub text start (finish - start), start, finish) else None
 
-type symbol = { name : string; kind : int; start_offset : int; end_offset : int }
-
-let symbols text =
-  let lines = String.split_on_char '\n' text in
-  let find_name line prefix =
-    let length = String.length line in
-    let prefix_length = String.length prefix in
-    let rec walk index =
-      if index + prefix_length > length then None
-      else if String.sub line index prefix_length = prefix then
-        let start = index + prefix_length in
-        let rec finish index =
-          if index < length && is_identifier line.[index] then finish (index + 1) else index
-        in
-        let stop = finish start in
-        if stop > start then Some (start, stop) else None
-      else walk (index + 1)
-    in
-    walk 0
-  in
-  let state_field line =
-    let length = String.length line in
-    let rec skip index = if index < length && (line.[index] = ' ' || line.[index] = '\t') then skip (index + 1) else index in
-    let first = match String.index_opt line '{' with Some index -> skip (index + 1) | None -> skip 0 in
-    let rec finish index = if index < length && is_identifier line.[index] then finish (index + 1) else index in
-    let last = finish first in
-    if last > first && last < length && line.[last] = ':' then Some (first, last) else None
-  in
-  let rec walk offset in_state out = function
-    | [] -> List.rev out
-    | line :: rest ->
-        let make kind (start, finish) =
-          { name = String.sub line start (finish - start); kind; start_offset = offset + start; end_offset = offset + finish }
-        in
-        let items =
-          match find_name line "program " with
-          | Some position -> [make 2 position]
-          | None ->
-              match find_name line "Program " with
-              | Some position -> [make 2 position]
-              | None -> match find_name line "contract " with
-                  | Some position -> [make 5 position]
-                  | None -> match find_name line "Contract " with
-                      | Some position -> [make 5 position]
-                      | None -> match find_name line "form " with
-                          | Some position -> [make 12 position]
-                          | None -> match find_name line "struct " with
-                              | Some position -> [make 23 position]
-                              | None -> match find_name line "enum " with
-                                  | Some position -> [make 10 position]
-                                  | None -> match find_name line "interface " with
-                                      | Some position -> [make 11 position]
-                                      | None -> match find_name line "event " with
-                                          | Some position -> [make 24 position]
-                                          | None -> match find_name line "fn " with
-                                              | Some position -> [make 12 position]
-                                              | None when contains line "constructor" ->
-                                                  let first = Option.value ~default:0 (String.index_opt line 'c') in
-                                                  [{ name = "constructor"; kind = 9; start_offset = offset + first; end_offset = offset + first + 11 }]
-                                              | None when in_state || (contains line "state" && contains line "{") ->
-                                                  Option.to_list (Option.map (make 8) (state_field line))
-                                              | None -> []
-        in
-        let opens_state = contains line "state" && contains line "{" in
-        let next_state = if (in_state || opens_state) && contains line "}" then false else in_state || opens_state in
-        walk (offset + String.length line + 1) next_state (List.rev_append items out) rest
-  in
-  walk 0 false [] lines
-
-let identifier_occurrences text name =
-  let name_length = String.length name in
-  let text_length = String.length text in
-  let rec walk index out =
-    if index + name_length > text_length then List.rev out
-    else if String.sub text index name_length = name
-        && (index = 0 || not (is_identifier text.[index - 1]))
-        && (index + name_length = text_length || not (is_identifier text.[index + name_length]))
-    then walk (index + name_length) ((index, index + name_length) :: out)
-    else walk (index + 1) out
-  in
-  if name = "" then [] else walk 0 []
-
-let symbol_named text name =
-  List.find_opt (fun symbol -> String.equal symbol.name name) (symbols text)
-
 let valid_identifier name =
   String.length name > 0
-  && is_identifier name.[0]
-  && String.for_all is_identifier name
+  && (match name.[0] with 'a' .. 'z' | 'A' .. 'Z' | '_' -> true | _ -> false)
+  && String.for_all (function
+       | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true
+       | _ -> false) name
 
 let executable_in_path name =
   match Sys.getenv_opt "PATH" with
@@ -287,17 +282,25 @@ let executable_in_path name =
       in
       find (String.split_on_char ':' path)
 
+let installed_checker name =
+  let executable = if Filename.is_implicit Sys.executable_name then
+      executable_in_path Sys.executable_name else Sys.executable_name in
+  (* Some launchers expose the server through a bin-directory symlink. *)
+  let executable = try Unix.realpath executable with Unix.Unix_error _ -> executable in
+  let bundled = Filename.concat (Filename.dirname executable)
+      ("../lib/amlc-lsp/" ^ name) in
+  try Unix.access bundled [Unix.X_OK]; bundled
+  with Unix.Unix_error _ -> executable_in_path name
+
 let compiler_command () =
   match Sys.getenv_opt "AMLC" with
   | Some command when command <> "" -> command
-  | _ -> executable_in_path "amlc"
+  | _ -> installed_checker "amlc"
 
 let rehovot_command () =
   match Sys.getenv_opt "REHOVOT_CHECK" with
   | Some command when command <> "" -> command
-  | _ -> executable_in_path "rehovot-check"
-
-type dialect = Legacy_amlc | Appliedml
+  | _ -> installed_checker "rehovot-check"
 
 let dialect_override : dialect option ref = ref None
 
@@ -309,9 +312,15 @@ let dialect_of_string = function
 
 let set_dialect_override value =
   dialect_override := value;
+  analysis_recency := [];
   Hashtbl.reset diagnostic_cache;
   Hashtbl.reset symbol_cache;
-  Hashtbl.reset semantic_token_cache
+  Hashtbl.reset semantic_token_cache;
+  Hashtbl.reset member_cache;
+  Hashtbl.reset signature_cache;
+  Hashtbl.reset formatting_cache;
+  Hashtbl.reset document_dependencies;
+  Hashtbl.reset project_symbol_cache
 
 (* Keep byte offsets intact while hiding comments and strings from the small
    declaration-level heuristics below.  This is deliberately not a second
@@ -385,14 +394,16 @@ let document_dialect text =
                               "measure "; "law "; "data "; "shape "]
       then Legacy_amlc
       else if has_line_start code ["contract "; "Contract "; "program "; "Program ";
-                                   "interface "; "Interface "] then Appliedml
+                                   "interface "] then Appliedml
       else Legacy_amlc
 
-(* Contract files use the pinned Rehovot parser rather than the bundled preview
-   AMLC, whose older grammar reports false lexical errors for [self.field]. *)
+(* The legacy profile routes contract files through the pinned Rehovot parser
+   instead of its patched preview AMLC, whose grammar rejects [self.field]. *)
 let is_appliedml_contract text = document_dialect text = Appliedml
 
-let checker_name text = if is_appliedml_contract text then "rehovot-check" else "amlc"
+let checker_name text =
+  if Option.is_some !library_analyzer then "amlc.vm"
+  else if is_appliedml_contract text then "rehovot-check" else "amlc"
 
 let terminate_process pid =
   (try Unix.kill pid Sys.sigterm with Unix.Unix_error _ -> ());
@@ -487,26 +498,86 @@ let read_process command arguments =
     (try terminate_process pid with Unix.Unix_error _ -> ());
     raise error
 
+let canonical_document_path uri =
+  let path = File_uri.to_path uri in
+  try Unix.realpath path with Unix.Unix_error _ ->
+    Filename.concat (Unix.realpath (Filename.dirname path)) (Filename.basename path)
+
+let remove_temporary_file file =
+  try Sys.remove file with Sys_error _ -> ()
+
+let remove_worker_files (source, overlays) =
+  remove_temporary_file source;
+  remove_temporary_file overlays
+
+let with_analysis_file ?temp_dir ?(overlay = false) prefix suffix run =
+  match !worker_temporary_files with
+  | Some (source, overlays) -> run (if overlay then overlays else source)
+  | None ->
+      let file = Filename.temp_file ?temp_dir prefix suffix in
+      Fun.protect ~finally:(fun () -> remove_temporary_file file) (fun () -> run file)
+
+let with_document_overlays run =
+  let overlays = Hashtbl.fold (fun uri target overlays ->
+    try (canonical_document_path uri, `String target.text) :: overlays
+    with Unix.Unix_error _ | Invalid_argument _ -> overlays) documents [] in
+  if overlays = [] then run [] else
+  with_analysis_file ~overlay:true ".amlc-lsp-overlays-" ".json" (fun file ->
+    Yojson.Safe.to_file file (`Assoc overlays);
+    run ["--overlays=json"; file])
+
 let check_document ?path text =
   (* Keep the temporary source beside the real document when possible.  Rehovot
      imports are relative to their importing file, so /tmp would make an
      otherwise valid [import X from "./x.aml"] look unrelated to its module. *)
-  let file =
-    match path with
-    | Some path -> Filename.temp_file ~temp_dir:(Filename.dirname path) ".amlc-lsp-" ".aml"
-    | None -> Filename.temp_file "amlc-lsp-" ".aml"
-  in
-  Fun.protect ~finally:(fun () -> Sys.remove file) (fun () ->
+  with_analysis_file ?temp_dir:(Option.map Filename.dirname path) ".amlc-lsp-" ".aml" (fun file ->
       let channel = open_out_bin file in
       Fun.protect ~finally:(fun () -> close_out_noerr channel) (fun () -> output_string channel text; close_out channel);
       let compiler = if is_appliedml_contract text then rehovot_command () else compiler_command () in
-      read_process compiler [ "check"; file; "--diagnostics=json" ])
+      let run options = read_process compiler ([ "check"; file; "--diagnostics=json" ] @ options) in
+      if is_appliedml_contract text then with_document_overlays run else run [])
 
 let position_of_json json =
   match (int_member "line" json, int_member "column" json) with
   | Some line, Some column when line > 0 && column > 0 ->
       Some { line = line - 1; character = column - 1; offset = int_member "offset" json }
   | _ -> None
+
+let open_document_at_path path =
+  Hashtbl.fold (fun uri document found ->
+    match found with Some _ -> found | None ->
+      try if canonical_document_path uri = path then Some (uri, document) else None
+      with Unix.Unix_error _ | Invalid_argument _ -> None) documents None
+
+let compiler_editor_query ?replacement document flag offset =
+  if Option.is_some !library_analyzer || not (is_appliedml_contract document.text)
+      || String.length document.text > max_document_bytes then `Null else
+  try
+    let path = File_uri.to_path document.uri in
+    let file = Filename.temp_file ~temp_dir:(Filename.dirname path) ".amlc-lsp-completion-" ".aml" in
+    Fun.protect ~finally:(fun () -> Sys.remove file) (fun () ->
+      Out_channel.with_open_bin file (fun output -> output_string output document.text);
+      let run options =
+        let options = (match replacement with Some name -> ["--new-name"; name] | None -> []) @ options in
+        let options = if flag = "--references=json" || flag = "--rename=json" then
+          let roots = List.filter_map (fun uri ->
+            try Some (`String (canonical_document_path uri))
+            with Unix.Unix_error _ | Invalid_argument _ -> None) !workspace_roots in
+          ["--source-path"; canonical_document_path document.uri;
+           "--workspace-roots=json"; Yojson.Safe.to_string (`List roots)] @ options else options in
+        match read_process (rehovot_command ()) (["check"; file; flag; string_of_int offset] @ options) with
+        | Unix.WEXITED 0, output -> from_string output
+        | _ -> `Null in
+      with_document_overlays run)
+  with Compiler_timeout _ | Compiler_output_limit _ | Unix.Unix_error _
+     | Sys_error _ | Yojson.Json_error _ | Invalid_argument _ -> `Null
+
+let compiler_completions document offset =
+  match compiler_editor_query document "--completion=json" offset with
+  | `Assoc fields ->
+      (match List.assoc_opt "items" fields with Some (`List items) -> items | _ -> []),
+      List.assoc_opt "suppressFallback" fields = Some (`Bool true)
+  | _ -> [], false
 
 let symbol_of_json json =
   match string_member "kind" json, string_member "name" json, string_member "type" json with
@@ -536,7 +607,7 @@ let symbol_of_json json =
       Some {
         id = string_member "id" json;
         kind; name; typ; signature = string_member "signature" json;
-        selection_start; selection_end; occurrences;
+        selection_start; selection_end; completion_scopes = []; occurrences;
       }
   | _ -> None
 
@@ -550,44 +621,37 @@ let semantic_token_of_json json =
   | _ -> None
 
 let compiler_metadata_for_text ?path text =
-  let file =
-    match path with
-    | Some path -> Filename.temp_file ~temp_dir:(Filename.dirname path) ".amlc-lsp-symbols-" ".aml"
-    | None -> Filename.temp_file "amlc-lsp-symbols-" ".aml"
-  in
-  Fun.protect ~finally:(fun () -> Sys.remove file) (fun () ->
+  with_analysis_file ?temp_dir:(Option.map Filename.dirname path) ".amlc-lsp-symbols-" ".aml" (fun file ->
       let channel = open_out_bin file in
       Fun.protect ~finally:(fun () -> close_out_noerr channel) (fun () ->
           output_string channel text;
           close_out channel);
       let compiler = if is_appliedml_contract text then rehovot_command () else compiler_command () in
-      match read_process compiler [ "check"; file; "--symbols=json" ] with
+      let run options = read_process compiler (["check"; file;
+        (if is_appliedml_contract text then "--analysis-metadata=json" else "--symbols=json")] @ options) in
+      match (if is_appliedml_contract text then with_document_overlays run else run []) with
       | Unix.WEXITED 0, output ->
           begin
             try
               match from_string output with
-              | `List values -> List.filter_map symbol_of_json values, []
+              | `List values -> List.filter_map symbol_of_json values, [], None
               | `Assoc fields ->
                   let symbols = match List.assoc_opt "symbols" fields with
                     | Some (`List values) -> List.filter_map symbol_of_json values | _ -> [] in
                   let semantic_tokens = match List.assoc_opt "semanticTokens" fields with
                     | Some (`List values) -> List.filter_map semantic_token_of_json values | _ -> [] in
-                  symbols, semantic_tokens
-              | _ -> [], []
-            with Yojson.Json_error _ -> [], []
+                  let dependencies = match List.assoc_opt "dependencies" fields with
+                    | Some json when Util.member "complete" json = `Bool true ->
+                        (match Util.member "paths" json with
+                         | `List paths when List.for_all (function `String _ -> true | _ -> false) paths ->
+                             Some (List.map Util.to_string paths)
+                         | _ -> None)
+                    | _ -> None in
+                  symbols, semantic_tokens, dependencies
+              | _ -> [], [], None
+            with Yojson.Json_error _ -> [], [], None
           end
-      | _ -> [], [])
-
-let compiler_symbols_for_text ?path text = fst (compiler_metadata_for_text ?path text)
-
-let symbols_document text =
-  match Hashtbl.find_opt symbol_cache text with
-  | Some symbols -> symbols
-  | None ->
-      let symbols = compiler_symbols_for_text text in
-      if Hashtbl.length symbol_cache >= max_cached_documents then Hashtbl.reset symbol_cache;
-      Hashtbl.replace symbol_cache text symbols;
-      symbols
+      | _ -> [], [], None)
 
 let project_symbols_of_json json =
   match Util.member "sources" json with
@@ -621,10 +685,9 @@ let project_symbols_of_json json =
 let canonical_path path = try Unix.realpath path with Unix.Unix_error _ -> path
 
 let path_of_uri uri =
-  let path = if starts_with "file://" uri then String.sub uri 7 (String.length uri - 7) else uri in
-  canonical_path path
+  canonical_path (File_uri.to_path uri)
 
-let uri_of_path path = "file://" ^ canonical_path path
+let uri_of_path path = File_uri.of_path (canonical_path path)
 
 let project_manifests () =
   !workspace_roots
@@ -711,10 +774,6 @@ let diagnostic text value =
     ("message", `String value.message);
   ]
 
-let fallback_diagnostic text message = diagnostic text {
-  message; code = "AMLC000"; severity = 1; start_position = { line = 0; character = 0; offset = None }; end_position = { line = 0; character = 0; offset = None };
-}
-
 let compiler_fallback ?(code = "AMLC000") message = {
   message; code; severity = 1;
   start_position = { line = 0; character = 0; offset = None };
@@ -771,102 +830,19 @@ let has_machine_diagnostics output =
         | _ -> false
       with Yojson.Json_error _ -> false)
 
-let publish output uri diagnostics =
+let publish output uri ?version diagnostics =
+  let params = [ ("uri", `String uri) ]
+    @ Option.to_list (Option.map (fun value -> "version", `Int value) version)
+    @ [ ("diagnostics", `List diagnostics) ] in
   Jsonrpc.write output (`Assoc [
     ("jsonrpc", `String "2.0"); ("method", `String "textDocument/publishDiagnostics");
-    ("params", `Assoc [ ("uri", `String uri); ("diagnostics", `List diagnostics) ]);
+    ("params", `Assoc params);
   ])
-
-let parse_project_diagnostics output =
-  output |> String.split_on_char '\n' |> List.filter_map (fun line ->
-      let line = String.trim line in
-      if line = "" then None else
-      try Option.bind (string_member "path" (from_string line)) (fun path ->
-          Option.map (fun diagnostic -> path, diagnostic) (diagnostic_of_json (from_string line)))
-      with Yojson.Json_error _ -> None)
-
-let import_position text (item : project_import) =
-  let needle = "import \"" ^ item.path ^ "\" as " ^ item.alias in
-  let rec find line = function
-    | [] -> { line = 0; character = 0; offset = Some 0 }
-    | value :: rest ->
-        if contains value needle then
-          { line; character = 0; offset = Some (line_start text line) }
-        else find (line + 1) rest
-  in
-  find 0 (String.split_on_char '\n' text)
-
-let module_import_diagnostics manifest sources =
-  let base = Filename.dirname manifest in
-  let known = List.map (fun (source : project_source) ->
-      canonical_path (Filename.concat base source.path)) sources in
-  sources |> List.concat_map (fun (source : project_source) ->
-      let full_path = canonical_path (Filename.concat base source.path) in
-      let text =
-        let uri = uri_of_path full_path in
-        match Hashtbl.find_opt documents uri with
-        | Some document -> document.text
-        | None ->
-            begin try In_channel.with_open_bin full_path In_channel.input_all
-            with Sys_error _ -> ""
-            end
-      in
-      let seen = Hashtbl.create 4 in
-      source.imports |> List.filter_map (fun (item : project_import) ->
-          let target = canonical_path (Filename.concat (Filename.dirname full_path) item.path) in
-          let issue =
-            if Hashtbl.mem seen item.alias then
-              Some ("AMLC202", "import alias is repeated: " ^ item.alias)
-            else if String.equal target full_path then
-              Some ("AMLC203", "module cannot import itself: " ^ item.path)
-            else if not (List.mem target known) then
-              Some ("AMLC201", "import target is not a project source: " ^ item.path)
-            else None
-          in
-          Hashtbl.replace seen item.alias true;
-          Option.map (fun (code, message) ->
-              let start_position = import_position text item in
-              let end_position = { start_position with character = String.length item.alias } in
-              full_path, { message; code; severity = 1; start_position; end_position }) issue))
-
-let project_module_diagnostics () =
-  project_manifests () |> List.concat_map (fun manifest ->
-      module_import_diagnostics manifest (project_symbols_document manifest))
-
-let module_diagnostics_for_uri uri text =
-  if not (contains text "import ") then [] else
-  project_manifests () |> List.concat_map (fun manifest ->
-      match read_process (compiler_command ()) [ "check"; manifest; "--diagnostics=json" ] with
-      | _, output ->
-          let base = Filename.dirname manifest in
-          parse_project_diagnostics output |> List.filter_map (fun (relative, diagnostic) ->
-              let path = canonical_path (Filename.concat base relative) in
-              if String.equal (uri_of_path path) uri then Some diagnostic else None))
-
-let publish_project_diagnostics output =
-  List.iter (fun manifest ->
-      match read_process (compiler_command ()) [ "check"; manifest; "--diagnostics=json" ] with
-      | _, details ->
-          let base = Filename.dirname manifest in
-          let grouped = Hashtbl.create 8 in
-          List.iter (fun (relative, diagnostic) ->
-              let full = canonical_path (Filename.concat base relative) in
-              let current = Option.value ~default:[] (Hashtbl.find_opt grouped full) in
-              Hashtbl.replace grouped full (diagnostic :: current)) (parse_project_diagnostics details);
-          Hashtbl.iter (fun path diagnostics ->
-              let uri = uri_of_path path in
-              if not (Hashtbl.mem documents uri) then
-                begin try
-                  let text = In_channel.with_open_bin path In_channel.input_all in
-                  publish output uri (List.rev_map (diagnostic text) diagnostics)
-                with Sys_error _ -> ()
-                end) grouped
-      ) (project_manifests ())
 
 let diagnostics_for_text uri text =
   if String.length text > max_document_bytes then [too_large_diagnostic text]
   else
-    match Hashtbl.find_opt diagnostic_cache text with
+    match Hashtbl.find_opt diagnostic_cache (uri, text) with
     | Some diagnostics -> diagnostics
     | None ->
         let diagnostics =
@@ -896,36 +872,63 @@ let diagnostics_for_text uri text =
               [compiler_fallback ("could not run " ^ checker_name text ^ ": " ^ Unix.error_message error)]
         in
         let diagnostics = diagnostics @ canonical_declaration_diagnostics text in
-        if Hashtbl.length diagnostic_cache >= max_cached_documents then Hashtbl.reset diagnostic_cache;
-        Hashtbl.replace diagnostic_cache text diagnostics;
+        remember_analysis (uri, text);
+        Hashtbl.replace diagnostic_cache (uri, text) diagnostics;
         diagnostics
 
 let analyze_document uri text =
+  match !library_analyzer with
+  | Some analyze -> analyze uri text
+  | None ->
   let diagnostics = diagnostics_for_text uri text in
-  let symbols, semantic_tokens =
-    if List.exists (fun diagnostic -> diagnostic.severity = 1) diagnostics then [], []
+  let symbols, semantic_tokens, dependencies =
+    if String.length text > max_document_bytes then [], [], None
+    else if not (is_appliedml_contract text) && List.exists (fun diagnostic -> diagnostic.severity = 1) diagnostics then [], [], None
     else
       try compiler_metadata_for_text ~path:(path_of_uri uri) text with
-      | Compiler_timeout _ | Compiler_output_limit _ | Unix.Unix_error _ -> [], []
+      | Compiler_timeout _ | Compiler_output_limit _ | Unix.Unix_error _ | Sys_error _ -> [], [], None
   in
-  { diagnostics; symbols; semantic_tokens }
+  { diagnostics; symbols; semantic_tokens; members = []; signatures = []; formatting = None; dependencies }
 
-let publish_diagnostics output uri text diagnostics =
-  publish output uri (List.map (diagnostic text) diagnostics)
+let publish_diagnostics output document diagnostics =
+  publish output document.uri ?version:document.version
+    (List.map (diagnostic document.text) diagnostics)
+
+let close_job_output job =
+  (* EOF may precede process exit. Once closed, this descriptor number can
+     belong to another worker before finish, cancellation or timeout runs. *)
+  if not job.eof then begin
+    close_noerr job.output;
+    job.eof <- true
+  end
 
 let cancel_diagnostic_job uri =
   match Hashtbl.find_opt diagnostic_jobs uri with
   | None -> ()
   | Some job ->
       Hashtbl.remove diagnostic_jobs uri;
-      close_noerr job.output;
-      (try terminate_process_group job.pid with Unix.Unix_error _ -> ())
+      close_job_output job;
+      (try terminate_process_group job.pid with Unix.Unix_error _ -> ());
+      Option.iter remove_worker_files job.temporary_files
 
 let start_diagnostic_job uri document =
   cancel_diagnostic_job uri;
-  let read_fd, write_fd = Unix.pipe () in
+  (* Allocate before forking: cancellation can kill the child's finally blocks,
+     so the parent must own every analysis file and remove it after reaping. *)
+  let temporary_files = if Option.is_some !library_analyzer then None else
+    let source = Filename.temp_file ~temp_dir:(Filename.dirname (File_uri.to_path uri)) ".amlc-lsp-" ".aml" in
+    let overlays = try Filename.temp_file ".amlc-lsp-overlays-" ".json"
+      with error -> remove_temporary_file source; raise error in
+    Some (source, overlays) in
+  let read_fd, write_fd = try Unix.pipe () with error ->
+    Option.iter remove_worker_files temporary_files; raise error in
   match Unix.fork () with
+  | exception error ->
+      close_noerr read_fd; close_noerr write_fd;
+      Option.iter remove_worker_files temporary_files;
+      raise error
   | 0 ->
+      worker_temporary_files := temporary_files;
       close_noerr read_fd;
       ignore (Unix.setsid ());
       let channel = Unix.out_channel_of_descr write_fd in
@@ -939,83 +942,243 @@ let start_diagnostic_job uri document =
   | pid ->
       close_noerr write_fd;
       Hashtbl.replace diagnostic_jobs uri {
-        pid; output = read_fd; buffer = Buffer.create 512; started_at = Unix.gettimeofday ();
+        pid; temporary_files; document; output = read_fd; buffer = Buffer.create 512; started_at = Unix.gettimeofday ();
         eof = false; status = None;
       }
 
 let collect_job_output job =
   let bytes = Bytes.create 8192 in
   let count = Unix.read job.output bytes 0 (Bytes.length bytes) in
-  if count = 0 then begin close_noerr job.output; job.eof <- true end
-  else if Buffer.length job.buffer + count > max_compiler_output_bytes + 65_536 then begin
-    close_noerr job.output;
-    job.eof <- true
-  end else Buffer.add_subbytes job.buffer bytes 0 count
+  if count = 0 || Buffer.length job.buffer + count > max_compiler_output_bytes + 65_536 then
+    close_job_output job
+  else Buffer.add_subbytes job.buffer bytes 0 count
 
-let finish_diagnostic_job output uri document job =
-  Hashtbl.remove diagnostic_jobs uri;
-  close_noerr job.output;
-  let diagnostics =
-    try
-      match (Marshal.from_bytes (Bytes.of_string (Buffer.contents job.buffer)) 0 :
-        (document_analysis, string) result) with
-      | Ok analysis ->
-          if Hashtbl.length symbol_cache >= max_cached_documents then Hashtbl.reset symbol_cache;
-          Hashtbl.replace symbol_cache document.text analysis.symbols;
-          if Hashtbl.length semantic_token_cache >= max_cached_documents then Hashtbl.reset semantic_token_cache;
-          Hashtbl.replace semantic_token_cache document.text analysis.semantic_tokens;
-          analysis.diagnostics
-      | Error message -> [compiler_fallback ("diagnostic worker failed: " ^ message)]
-    with _ -> [compiler_fallback "diagnostic worker returned invalid output"]
-  in
+let publish_analysis_result output uri document result =
+  (* The result belongs to an analysis snapshot, never the latest buffer. *)
   match Hashtbl.find_opt documents uri with
-  | Some current when String.equal current.text document.text ->
-      publish_diagnostics output uri current.text diagnostics
+  | Some current when current.text = document.text ->
+      remember_analysis (document_key document);
+      let diagnostics =
+          match result with
+          | Ok (analysis : document_analysis) ->
+              Hashtbl.replace document_dependencies uri analysis.dependencies;
+              Hashtbl.replace symbol_cache (document_key document) analysis.symbols;
+              Hashtbl.replace semantic_token_cache (document_key document) analysis.semantic_tokens;
+              Hashtbl.replace member_cache (document_key document) analysis.members;
+              Hashtbl.replace signature_cache (document_key document) analysis.signatures;
+              Hashtbl.replace formatting_cache (document_key document) analysis.formatting;
+              analysis.diagnostics
+          | Error message -> [compiler_fallback ("diagnostic analysis failed: " ^ message)]
+      in
+      (* Process workers cannot update the parent's caches. Publish and pull
+         must share the result committed here. *)
+      Hashtbl.replace diagnostic_cache (document_key document) diagnostics;
+      publish_diagnostics output current diagnostics
   | _ -> ()
+
+let finish_diagnostic_job output uri job =
+  let document = job.document in
+  Hashtbl.remove diagnostic_jobs uri;
+  close_job_output job;
+  Option.iter remove_worker_files job.temporary_files;
+  let result =
+    try
+      (Marshal.from_bytes (Bytes.of_string (Buffer.contents job.buffer)) 0 :
+        (document_analysis, string) result)
+    with Failure _ | Invalid_argument _ ->
+      Error "diagnostic worker returned invalid output"
+  in
+  publish_analysis_result output uri document result
 
 let poll_diagnostic_jobs output readable =
   let now = Unix.gettimeofday () in
   Hashtbl.to_seq diagnostic_jobs |> List.of_seq |> List.iter (fun (uri, job) ->
       if now -. job.started_at >= analysis_timeout_seconds then begin
         Hashtbl.remove diagnostic_jobs uri;
-        close_noerr job.output;
+        close_job_output job;
         (try terminate_process_group job.pid with Unix.Unix_error _ -> ());
+        Option.iter remove_worker_files job.temporary_files;
         match Hashtbl.find_opt documents uri with
         | Some document ->
-            publish_diagnostics output uri document.text
+            publish_diagnostics output document
               [compiler_fallback
-                ~code:(if is_appliedml_contract document.text then "REHOVOT902" else "AMLC902")
+                ~code:(if Option.is_none !library_analyzer && is_appliedml_contract document.text
+                  then "REHOVOT902" else "AMLC902")
                 "compiler worker exceeded the analysis timeout"]
         | None -> ()
       end else begin
         if List.mem job.output readable && not job.eof then collect_job_output job;
-        if job.status = None then
+        if job.status = None then begin
           match Unix.waitpid [Unix.WNOHANG] job.pid with
           | 0, _ -> ()
-          | _, status -> job.status <- Some status;
+          | _, status -> job.status <- Some status
+        end;
         if job.eof && Option.is_some job.status then
           match Hashtbl.find_opt documents uri with
-          | Some document -> finish_diagnostic_job output uri document job
-          | None -> Hashtbl.remove diagnostic_jobs uri
+          | Some _ -> finish_diagnostic_job output uri job
+          | None ->
+              Hashtbl.remove diagnostic_jobs uri;
+              Option.iter remove_worker_files job.temporary_files
       end)
 
 let schedule_diagnostics uri document =
   cancel_diagnostic_job uri;
   Hashtbl.replace pending_checks uri (document, Unix.gettimeofday () +. debounce_seconds)
 
-let flush_due_diagnostics _output =
+let refresh_open_diagnostics ?changed () =
+  let changed_path = Option.bind changed (fun uri ->
+    try Some (canonical_document_path uri) with Unix.Unix_error _ | Invalid_argument _ -> None) in
+  let affected = Hashtbl.to_seq documents |> List.of_seq |> List.filter (fun (uri, _) ->
+    Some uri = changed || match changed_path, Hashtbl.find_opt document_dependencies uri with
+    | Some path, Some (Some dependencies) -> List.mem path dependencies
+    | _ -> true) in
+  (* Use compiler-provided transitive edges; unknown/incomplete graphs stay
+     conservative. Invalidate them before new workers fork so a changed import
+     header cannot leave an in-flight worker using the previous graph. *)
+  Hashtbl.reset project_symbol_cache;
+  List.iter (fun (uri, document) ->
+    let retain (cached_uri, _) _ = cached_uri <> uri in
+    analysis_recency := List.filter (fun (cached_uri, _) -> cached_uri <> uri) !analysis_recency;
+    Hashtbl.filter_map_inplace (fun key value -> if retain key value then Some value else None) diagnostic_cache;
+    Hashtbl.filter_map_inplace (fun key value -> if retain key value then Some value else None) symbol_cache;
+    Hashtbl.filter_map_inplace (fun key value -> if retain key value then Some value else None) semantic_token_cache;
+    Hashtbl.filter_map_inplace (fun key value -> if retain key value then Some value else None) member_cache;
+    Hashtbl.filter_map_inplace (fun key value -> if retain key value then Some value else None) signature_cache;
+    Hashtbl.filter_map_inplace (fun key value -> if retain key value then Some value else None) formatting_cache;
+    Hashtbl.remove document_dependencies uri;
+    schedule_diagnostics uri document) affected
+
+let flush_due_diagnostics output =
   let now = Unix.gettimeofday () in
   let due = Hashtbl.fold (fun uri (document, deadline) due ->
       if deadline <= now then (uri, document) :: due else due) pending_checks [] in
   List.iter (fun (uri, document) ->
       Hashtbl.remove pending_checks uri;
       match Hashtbl.find_opt documents uri with
-      | Some current when String.equal current.text document.text -> start_diagnostic_job uri current
+      | Some current when String.equal current.text document.text ->
+          (try start_diagnostic_job uri current with Sys_error message ->
+            publish_diagnostics output current [compiler_fallback message]
+          | Unix.Unix_error (error, _, _) ->
+            publish_diagnostics output current [compiler_fallback (Unix.error_message error)])
       | _ -> ()) due
 
+let windows_worker_flag = "--amlc-lsp-analysis-worker"
+let max_worker_overlay_bytes = 8_000_000
+
+let windows_worker_request uri text =
+  let _, _, overlays = Hashtbl.fold (fun open_uri document (count, bytes, overlays) ->
+    let size = String.length open_uri + String.length document.text + 64 in
+    if String.equal open_uri uri || count >= 4 * max_editor_requests
+      || bytes + size > max_worker_overlay_bytes then count, bytes, overlays
+    else count + 1, bytes + size, `Assoc [
+      "uri", `String open_uri; "text", `String document.text;
+      "version", Option.value ~default:`Null (Option.map (fun value -> `Int value) document.version)
+    ] :: overlays) documents (0, 0, []) in
+  `Assoc [
+    "uri", `String uri; "text", `String text; "documents", `List overlays;
+    "dialect", (match !dialect_override with
+      | Some Legacy_amlc -> `String "legacy"
+      | Some Appliedml -> `String "appliedml"
+      | None -> `Null)
+  ]
+
+let run_windows_worker uri text =
+  let request = Filename.temp_file "amlc-lsp-request-" ".json" in
+  let response = Filename.temp_file "amlc-lsp-response-" ".bin" in
+  let pid = ref None and reaped = ref false in
+  Fun.protect ~finally:(fun () ->
+    Option.iter (fun child ->
+      if not !reaped then begin
+        (try Unix.kill child Sys.sigkill with Unix.Unix_error _ -> ());
+        (try ignore (Unix.waitpid [] child) with Unix.Unix_error _ -> ())
+      end) !pid;
+    remove_temporary_file request;
+    remove_temporary_file response) (fun () ->
+      Yojson.Safe.to_file request (windows_worker_request uri text);
+      let executable = Sys.executable_name in
+      let arguments = [|executable; windows_worker_flag; request; response|] in
+      (* The worker communicates only through its request and response files.
+         Do not share the LSP pipes with the Windows reader thread or allow a
+         library message to corrupt the protocol stream. *)
+      let null = Unix.openfile "NUL" [Unix.O_RDWR] 0o600 in
+      let child =
+        try
+          let child = Unix.create_process executable arguments null null null in
+          close_noerr null;
+          child
+        with error -> close_noerr null; raise error in
+      pid := Some child;
+      let deadline = Unix.gettimeofday () +. analysis_timeout_seconds in
+      let rec wait () =
+        match Unix.waitpid [Unix.WNOHANG] child with
+        | 0, _ when Unix.gettimeofday () < deadline -> Unix.sleepf 0.02; wait ()
+        | 0, _ -> Error "worker exceeded the analysis timeout"
+        | _, Unix.WEXITED 0 ->
+            reaped := true;
+            let stat = Unix.stat response in
+            if stat.st_size > max_compiler_output_bytes + 65_536 then
+              Error "worker exceeded the analysis output limit"
+            else
+              In_channel.with_open_bin response (fun channel ->
+                try (Marshal.from_channel channel : (document_analysis, string) result)
+                with Failure _ | Invalid_argument _ -> Error "worker returned invalid output")
+        | _, _ -> reaped := true; Error "worker exited unsuccessfully"
+      in
+      wait ())
+
+(* Native Windows has no [fork]. Run the same executable as a bounded, one-shot
+   official-library worker after coalescing protocol frames. *)
+let flush_pending_diagnostics_windows output =
+  let now = Unix.gettimeofday () in
+  let pending = Hashtbl.fold (fun uri (document, deadline) pending ->
+    if deadline <= now then (uri, document, deadline) :: pending else pending) pending_checks [] in
+  let requested document = List.exists (fun request ->
+    request.snapshot = document) !editor_requests in
+  let pending = List.sort (fun (_, left, left_deadline) (_, right, right_deadline) ->
+    compare (not (requested left), left_deadline) (not (requested right), right_deadline)) pending in
+  match pending with
+  | (uri, document, _) :: _ ->
+    Hashtbl.remove pending_checks uri;
+    begin match Hashtbl.find_opt documents uri with
+      | Some current when String.equal current.text document.text ->
+          let result = try run_windows_worker uri current.text
+            with error -> Error (Printexc.to_string error) in
+          publish_analysis_result output uri current result
+      | _ -> ()
+    end
+  | [] -> ()
+
+type input_event = Input_message of Yojson.Safe.t | Input_end | Input_error of exn
+
+let windows_input_reader () =
+  let queue = Queue.create () in
+  let mutex = Mutex.create () in
+  let space = Condition.create () in
+  let capacity = 4 * max_editor_requests in
+  let push event =
+    Mutex.lock mutex;
+    while Queue.length queue >= capacity do Condition.wait space mutex done;
+    Queue.add event queue;
+    Mutex.unlock mutex in
+  let pop () =
+    Mutex.lock mutex;
+    let event = Queue.take_opt queue in
+    Option.iter (fun _ -> Condition.signal space) event;
+    Mutex.unlock mutex;
+    event in
+  let rec read () = match Jsonrpc.read stdin with
+    | Some message -> push (Input_message message); read ()
+    | None -> push Input_end
+    | exception error -> push (Input_error error) in
+  ignore (Thread.create read ());
+  pop
+
 let next_check_timeout () =
-  Hashtbl.fold (fun _ (_, deadline) timeout ->
-      min timeout (max 0. (deadline -. Unix.gettimeofday ()))) pending_checks 1.0
+  let now = Unix.gettimeofday () in
+  let timeout = Hashtbl.fold (fun _ (_, deadline) timeout ->
+      min timeout (max 0. (deadline -. now))) pending_checks 1.0 in
+  List.fold_left (fun timeout request -> min timeout (max 0. (request.deadline -. now)))
+    timeout !editor_requests
 
 let response id result = `Assoc [ ("jsonrpc", `String "2.0"); ("id", id); ("result", result) ]
 let error_response id code message = `Assoc [
@@ -1025,12 +1188,11 @@ let error_response id code message = `Assoc [
 let initialize_result = `Assoc [
   ("capabilities", `Assoc [
     ("textDocumentSync", `Assoc [ ("openClose", `Bool true); ("change", `Int 2) ]);
-    ("diagnosticProvider", `Assoc [
-      ("identifier", `String "amlc-lsp");
-      ("interFileDependencies", `Bool false);
-      ("workspaceDiagnostics", `Bool false);
-    ]);
-    ("completionProvider", `Assoc [ ("triggerCharacters", `List []) ]);
+    (* Workers publish complete reports, including dependency-only changes.
+       Do not also advertise pull: clients keep its reports separately from
+       pushed diagnostics, leaving duplicate or stale entries after edits.
+       The explicit diagnostic request remains a cached compatibility query. *)
+    ("completionProvider", `Assoc [ ("triggerCharacters", `List [`String "."]) ]);
     ("documentSymbolProvider", `Bool true);
     ("hoverProvider", `Bool true);
     ("definitionProvider", `Bool true);
@@ -1057,9 +1219,34 @@ let initialize_result = `Assoc [
     ("workspace", `Assoc [ ("workspaceFolders", `Assoc [
       ("supported", `Bool true); ("changeNotifications", `Bool true);
     ]) ]);
-    ("serverInfo", `Assoc [ ("name", `String "amlc-lsp"); ("version", `String "0.1.0") ]);
   ]);
+  ("serverInfo", `Assoc [ ("name", `String "amlc-lsp"); ("version", `String "0.3.0") ]);
 ]
+
+let library_methods = [
+  "textDocument/diagnostic"; "textDocument/completion";
+  "textDocument/documentSymbol";
+  "textDocument/definition"; "textDocument/declaration"; "textDocument/references";
+  "textDocument/prepareRename"; "textDocument/rename"; "textDocument/codeAction";
+  "textDocument/hover"; "textDocument/signatureHelp"; "textDocument/formatting";
+  "textDocument/semanticTokens/full";
+  "textDocument/foldingRange"; "textDocument/selectionRange";
+]
+
+let initialized_result () =
+  if Option.is_none !library_analyzer then initialize_result else
+  let fields = Util.to_assoc initialize_result in
+  let capabilities = Util.member "capabilities" initialize_result |> Util.to_assoc in
+  let capabilities = List.filter (fun (key, _) -> List.mem key [
+    "textDocumentSync"; "foldingRangeProvider"; "selectionRangeProvider"; "workspace";
+    "documentSymbolProvider"; "definitionProvider"; "declarationProvider"; "hoverProvider";
+    "documentFormattingProvider"; "semanticTokensProvider"; "referencesProvider";
+    "renameProvider"; "codeActionProvider"
+  ]) capabilities in
+  `Assoc (("capabilities", `Assoc (("completionProvider",
+      `Assoc ["triggerCharacters", `List [`String "."]]) ::
+      ("signatureHelpProvider", `Assoc ["triggerCharacters", `List [`String "("; `String ","; `String "["]]) :: capabilities))
+    :: List.remove_assoc "capabilities" fields)
 
 let position_from_params params =
   Option.bind (object_member "position" params) (fun position ->
@@ -1098,12 +1285,6 @@ let range_from_offsets text first last =
     ("end", lsp_position text (utf16_position text last));
   ]
 
-let location uri text symbol =
-  `Assoc [
-    ("uri", `String uri);
-    ("range", range_from_offsets text symbol.start_offset symbol.end_offset);
-  ]
-
 let compiler_location uri text (symbol : compiler_symbol) =
   match symbol.selection_start, symbol.selection_end with
   | Some start_position, Some end_position ->
@@ -1139,6 +1320,63 @@ let compiler_occurrence_edits text replacement (symbol : compiler_symbol) =
         ("newText", `String replacement);
       ])
 
+let same_compiler_symbol (first : compiler_symbol) (second : compiler_symbol) =
+  match first.id, second.id with
+  | Some first, Some second -> String.equal first second
+  | _ -> first.kind = second.kind && first.name = second.name
+      && first.selection_start = second.selection_start
+      && first.selection_end = second.selection_end
+
+(* Compiler ranges remain authoritative for edits.  The lexical pass only
+   proves that no same-spelled identifier was omitted from every compiler
+   symbol; an unexplained token makes rename unavailable rather than becoming
+   an edit by textual matching. *)
+let compiler_occurrences_complete document name symbols =
+  let indexed = Hashtbl.create 16 in
+  let ranges_valid = ref true in
+  symbols |> List.filter (fun (symbol : compiler_symbol) -> symbol.name = name)
+  |> List.iter (fun symbol ->
+      List.iter (fun (_, first, last) ->
+        match first.offset, last.offset with
+        | Some first, Some last when first < last && last <= String.length document.text
+            && String.sub document.text first (last - first) = name ->
+            Hashtbl.replace indexed (first, last) ()
+        | _ -> ranges_valid := false) symbol.occurrences);
+  let code = source_code_mask document.text in
+  let rec scan index =
+    if index >= String.length code then true
+    else if is_identifier code.[index] then
+      let rec finish last =
+        if last < String.length code && is_identifier code.[last] then finish (last + 1)
+        else last in
+      let last = finish (index + 1) in
+      if last - index = String.length name
+          && String.sub code index (last - index) = name
+          && not (Hashtbl.mem indexed (index, last))
+      then false else scan last
+    else scan (index + 1) in
+  !ranges_valid && Hashtbl.length indexed > 0 && scan 0
+
+let source_has_identifier source name =
+  let code = source_code_mask source in
+  let rec scan index =
+    if index >= String.length code then false
+    else if is_identifier code.[index] then
+      let rec finish last =
+        if last < String.length code && is_identifier code.[last] then finish (last + 1)
+        else last in
+      let last = finish (index + 1) in
+      (last - index = String.length name && String.sub code index (last - index) = name)
+      || scan last
+    else scan (index + 1) in
+  scan 0
+
+let compiler_rename_safe document symbol =
+  Hashtbl.find_opt diagnostic_cache (document_key document) = Some []
+  && match Hashtbl.find_opt symbol_cache (document_key document) with
+     | Some symbols -> compiler_occurrences_complete document symbol.name symbols
+     | None -> false
+
 let position_in_range text line character start_position end_position =
   let normalise position =
     match position.offset with Some offset -> utf16_position text offset | None -> position
@@ -1152,7 +1390,7 @@ let position_in_range text line character start_position end_position =
 
 let compiler_occurrence_at document line character =
   Option.bind (word_at document.text line character) (fun (word, _, _) ->
-      Option.bind (Hashtbl.find_opt symbol_cache document.text) (fun symbols ->
+      Option.bind (Hashtbl.find_opt symbol_cache (document_key document)) (fun symbols ->
           List.find_map (fun (symbol : compiler_symbol) ->
               if not (String.equal symbol.name word) then None else
               List.find_map (fun (role, start_position, end_position) ->
@@ -1182,7 +1420,7 @@ let appliedml_completion_keywords = [
   "const"; "return"; "assert"; "require"; "emit"; "while"; "for";
   "self"; "caller"; "origin"; "epoch"; "epoch_time"; "value"; "balance";
   "invariant"; "struct"; "enum"; "match"; "interface"; "implements";
-  "import"; "error"; "revert"; "where"; "option";
+  "import"; "error"; "revert"; "where"; "option"; "some"; "none";
   "unwrap"; "is_some"; "self_addr"; "tree_hash";
   "node_id"; "tx_hash"; "nonreentrant"; "log"; "indexed";
   "once"; "many"; "marks"; "under"; "steps"; "depth"; "work";
@@ -1190,83 +1428,66 @@ let appliedml_completion_keywords = [
   "write"; "read"; "fail";
 ]
 
-let completion_keywords = legacy_completion_keywords @ appliedml_completion_keywords
-
 let completion_keywords_for text =
   match document_dialect text with
   | Legacy_amlc -> legacy_completion_keywords
   | Appliedml -> appliedml_completion_keywords
 
-(* Snapshot of the type alternatives in Octra node's Rehovot parse_type.
-   Legacy [unit] and [vec] remain below solely for preview AMLC documents. *)
-let appliedml_types = [
-  "int"; "bool"; "bytes"; "bytes32"; "string"; "address";
-  "u64"; "u128"; "u256"; "uint"; "sint"; "cipher"; "pubkey";
-  "map"; "list"; "seq"; "cap"; "Option"; "option";
+let rename_reserved_words = legacy_completion_keywords @ appliedml_completion_keywords @ [
+  "Contract"; "None"; "Option"; "Program"; "Some"; "address"; "and"; "as"; "bytes32"; "cipher";
+  "list"; "map"; "not"; "or"; "pubkey"; "string";
+  "u64"; "u128"; "u256"; "var"; "void";
 ]
 
-let aml_types = "unit" :: "vec" :: appliedml_types
+let valid_rename_identifier name =
+  valid_identifier name
+  && not (List.mem name rename_reserved_words)
 
-let completion_item ?(kind = 14) ?(detail = "AML") label =
+let completion_item ?(kind = 14) ?(detail = "AppliedML") label =
   `Assoc [ ("label", `String label); ("kind", `Int kind); ("detail", `String detail) ]
 
+let scoped_symbol (symbol : compiler_symbol) = List.mem symbol.kind ["local"; "parameter"; "iterator"]
+
 let symbol_completion_item (symbol : compiler_symbol) =
-  completion_item ~kind:3 ~detail:(Option.value ~default:symbol.typ symbol.signature) symbol.name
+  completion_item ~kind:(if scoped_symbol symbol then 6 else match symbol.kind with "enum" -> 13 | "struct" -> 22 | _ -> 3)
+    ~detail:(Option.value ~default:symbol.typ symbol.signature) symbol.name
 
 let lsp_symbol_kind = function
   | "program" | "contract" | "interface" -> 2
   | "struct" -> 23
   | "enum" -> 10
+  | "enumMember" -> 22
   | "field" -> 8
   | "event" -> 24
   | "constant" -> 14
-  | "function" | "form" | "method" | "constructor" -> 12
+  | "constructor" -> 9
+  | "function" | "form" | "method" -> 12
   | _ -> 13
 
 let text_edit text first last replacement =
   `Assoc [ ("range", range_from_offsets text first last); ("newText", `String replacement) ]
 
-let positions_for_symbol uri text name =
-  identifier_occurrences text name
-  |> List.map (fun (first, last) ->
-      `Assoc [ ("uri", `String uri); ("range", range_from_offsets text first last) ])
-
-let form_declaration_at text name first =
-  List.exists (fun symbol ->
-      symbol.kind = 12 && String.equal symbol.name name && symbol.start_offset = first) (symbols text)
-
-let direct_call_at text last =
-  let rec skip index =
-    if index < String.length text && (text.[index] = ' ' || text.[index] = '\t' || text.[index] = '\n') then skip (index + 1)
-    else index
-  in
-  let next = skip last in
-  next < String.length text && text.[next] = '('
-
-(* AMLC forms are declared with [form] and invoked with a direct call.  Limiting
-   edits to those two syntactic roles avoids renaming a same-spelled local bind. *)
-let semantic_occurrences text name =
-  identifier_occurrences text name
-  |> List.filter (fun (first, last) -> form_declaration_at text name first || direct_call_at text last)
-
 let compiler_form document name =
   List.find_opt (fun (symbol : compiler_symbol) ->
       List.mem symbol.kind ["form"; "function"; "constructor"] && String.equal symbol.name name)
-    (Option.value ~default:[] (Hashtbl.find_opt symbol_cache document.text))
+    (Option.value ~default:[] (Hashtbl.find_opt symbol_cache (document_key document)))
 
 let open_documents () =
   Hashtbl.fold (fun uri document documents -> (uri, document) :: documents) documents []
 
-let declaration_locations name =
-  open_documents ()
-  |> List.concat_map (fun (uri, document) ->
-      symbols document.text
-      |> List.filter (fun symbol -> String.equal symbol.name name)
-      |> List.map (location uri document.text))
-
-let documents_declaring name =
-  open_documents ()
-  |> List.filter (fun (_uri, document) -> Option.is_some (symbol_named document.text name))
+let library_workspace_query method_name document line character replacement =
+  Option.bind !library_workspace_analyzer (fun query ->
+    try
+      let path = canonical_document_path document.uri in
+      let roots = !workspace_roots |> List.filter_map (fun uri ->
+        try Some (canonical_document_path uri) with Unix.Unix_error _ | Invalid_argument _ -> None) in
+      if roots = [] || not (Sys.file_exists path) then None else
+      let overlays = open_documents () |> List.filter_map (fun (_, open_document) ->
+        try Some (canonical_document_path open_document.uri, open_document.text)
+        with Unix.Unix_error _ | Invalid_argument _ -> None) in
+      Some (query method_name roots overlays path document.text
+        (byte_offset document.text line character) replacement)
+    with Unix.Unix_error _ | Sys_error _ | Invalid_argument _ -> None)
 
 let trim_right value =
   let rec last index =
@@ -1341,57 +1562,6 @@ let compiler_accepts ?path text =
       && not (List.exists (fun diagnostic -> diagnostic.severity = 1) (parse_diagnostics output))
   with Compiler_timeout _ | Compiler_output_limit _ | Unix.Unix_error _ -> false
 
-let semantic_token_type forms parameters word =
-  if List.mem word aml_types then 3
-  else if List.mem word completion_keywords then 0
-  else if List.mem word forms then 1
-  else if List.mem word parameters then 4
-  else 2
-
-let form_parameters text =
-  let rec scan index values =
-    if index >= String.length text then List.rev values
-    else
-      let marker = if starts_with "many " (String.sub text index (String.length text - index)) then Some 5
-        else if starts_with "once " (String.sub text index (String.length text - index)) then Some 5
-        else None
-      in
-      match marker with
-      | None -> scan (index + 1) values
-      | Some length ->
-          let first = index + length in
-          let rec finish last = if last < String.length text && is_identifier text.[last] then finish (last + 1) else last in
-          let last = finish first in
-          if last > first && last < String.length text && text.[last] = ':' then
-            scan last (String.sub text first (last - first) :: values)
-          else scan first values
-  in
-  scan 0 []
-
-let contract_parameters text =
-  let identifiers_before_colon value =
-    let length = String.length value in
-    let rec scan index out =
-      if index >= length then out
-      else if not (is_identifier value.[index]) then scan (index + 1) out
-      else
-        let rec finish cursor = if cursor < length && is_identifier value.[cursor] then finish (cursor + 1) else cursor in
-        let stop = finish index in
-        let rec spaces cursor = if cursor < length && (value.[cursor] = ' ' || value.[cursor] = '\t') then spaces (cursor + 1) else cursor in
-        let next = spaces stop in
-        if next < length && value.[next] = ':' then scan stop (String.sub value index (stop - index) :: out)
-        else scan stop out
-    in
-    scan 0 []
-  in
-  String.split_on_char '\n' text |> List.concat_map (fun line ->
-      match String.index_opt line '(' with
-      | None -> []
-      | Some first ->
-          let remainder = String.sub line (first + 1) (String.length line - first - 1) in
-          let parameters = match String.index_opt remainder ')' with Some last -> String.sub remainder 0 last | None -> remainder in
-          identifiers_before_colon parameters)
-
 let semantic_token_kind = function
   | "keyword" -> 0 | "type" -> 1 | "function" -> 2 | "parameter" -> 3
   | "property" -> 4 | "event" -> 5 | "variable" -> 6 | "string" -> 7
@@ -1414,13 +1584,13 @@ let semantic_tokens text compiler_symbols compiler_tokens =
             max 0 (end_position.character - start_position.character), semantic_token_kind "function"))
     |> List.sort compare
   in
-  let _, _, data = List.fold_left (fun (previous_line, previous_character, output) (line, character, width, kind) ->
+  let _, _, reversed_data = List.fold_left (fun (previous_line, previous_character, output) (line, character, width, kind) ->
       let line_delta = line - previous_line in
       let character_delta = if line_delta = 0 then character - previous_character else character in
-      (line, character, output @ [ line_delta; character_delta; width; kind; 0 ]))
+      (line, character, 0 :: kind :: width :: character_delta :: line_delta :: output))
     (0, 0, []) tokens
   in
-  `Assoc [ ("data", `List (List.map (fun value -> `Int value) data)) ]
+  `Assoc [ ("data", `List (List.rev_map (fun value -> `Int value) reversed_data)) ]
 
 let case_contains text query = contains (String.lowercase_ascii text) (String.lowercase_ascii query)
 
@@ -1429,272 +1599,6 @@ let project_source_text uri path =
   | Some document -> Some document.text
   | None ->
       begin try Some (In_channel.with_open_bin path In_channel.input_all) with Sys_error _ -> None end
-
-let substring_index text needle =
-  let text_length = String.length text in
-  let needle_length = String.length needle in
-  let rec walk index =
-    if index + needle_length > text_length then None
-    else if String.sub text index needle_length = needle then Some index
-    else walk (index + 1)
-  in
-  if needle = "" then Some 0 else walk 0
-
-let contract_imports text =
-  String.split_on_char '\n' text |> List.filter_map (fun line ->
-      let line = String.trim line in
-      if not (starts_with "import " line) then None else
-      let body = String.sub line 7 (String.length line - 7) in
-      match substring_index body " from \"" with
-      | None -> None
-      | Some marker ->
-          let names = String.sub body 0 marker |> String.split_on_char ',' |> List.map String.trim |> List.filter valid_identifier in
-          let path_start = marker + 7 in
-          match String.index_from_opt body path_start '"' with
-          | None -> None
-          | Some _ when names = [] -> None
-          | Some path_end -> Some { names; path = String.sub body path_start (path_end - path_start) })
-
-let contract_import_target uri text name =
-  let current = path_of_uri uri in
-  contract_imports text |> List.find_map (fun (imported : contract_import) ->
-      if not (List.mem name imported.names) then None else
-      let target = canonical_path (Filename.concat (Filename.dirname current) imported.path) in
-      let target_uri = uri_of_path target in
-      Option.map (fun target_text -> target_uri, target_text) (project_source_text target_uri target))
-
-let contract_import_definition uri text name =
-  match contract_import_target uri text name with
-  | None -> None
-  | Some (target_uri, target_text) ->
-      Option.map (location target_uri target_text)
-        (List.find_opt (fun symbol -> String.equal symbol.name name) (symbols target_text))
-
-let quoted_at text offset =
-  let start =
-    let rec walk index =
-      if index <= 0 || text.[index - 1] = '\n' then index else walk (index - 1)
-    in
-    walk (min offset (String.length text))
-  in
-  let rec scan index in_string escaped =
-    if index >= offset then in_string
-    else if in_string then
-      if escaped then scan (index + 1) true false
-      else if text.[index] = '\\' then scan (index + 1) true true
-      else if text.[index] = '"' then scan (index + 1) false false
-      else scan (index + 1) true false
-    else if text.[index] = '"' then scan (index + 1) true false
-    else scan (index + 1) false false
-  in
-  scan start false false
-
-let contract_import_references uri text name =
-  Option.map (fun (target_uri, target_text) ->
-      let local = identifier_occurrences text name
-        |> List.filter (fun (first, _) -> not (quoted_at text first))
-        |> List.map (fun (first, last) -> `Assoc [ ("uri", `String uri); ("range", range_from_offsets text first last) ]) in
-      let declaration = symbols target_text
-        |> List.find_opt (fun symbol -> String.equal symbol.name name)
-        |> Option.to_list
-        |> List.map (fun symbol -> `Assoc [ ("uri", `String target_uri); ("range", range_from_offsets target_text symbol.start_offset symbol.end_offset) ]) in
-      declaration @ local) (contract_import_target uri text name)
-
-let contract_rename_imported uri text name replacement =
-  Option.map (fun (target_uri, target_text) ->
-      let current_edits = identifier_occurrences text name
-        |> List.filter (fun (first, _) -> not (quoted_at text first))
-        |> List.map (fun (first, last) -> text_edit text first last replacement) in
-      let target_edits = identifier_occurrences target_text name
-        |> List.map (fun (first, last) -> text_edit target_text first last replacement) in
-      `Assoc [ ("changes", `Assoc [ (uri, `List current_edits); (target_uri, `List target_edits) ]) ])
-    (contract_import_target uri text name)
-
-let contract_imported_symbols uri text =
-  let current = path_of_uri uri in
-  contract_imports text |> List.concat_map (fun (imported : contract_import) ->
-      let target = canonical_path (Filename.concat (Filename.dirname current) imported.path) in
-      let target_uri = uri_of_path target in
-      match project_source_text target_uri target with
-      | None -> []
-      | Some target_text -> symbols_document target_text
-          |> List.filter (fun (symbol : compiler_symbol) -> List.mem symbol.name imported.names)
-          |> List.map (fun (symbol : compiler_symbol) -> symbol.name, Option.value ~default:symbol.typ symbol.signature))
-
-let qualified_alias text start =
-  if start = 0 || text.[start - 1] <> '.' then None
-  else
-    let rec left index =
-      if index > 0 && is_identifier text.[index - 1] then left (index - 1) else index
-    in
-    let finish = start - 1 in
-    let first = left finish in
-    if finish > first then Some (String.sub text first (finish - first)) else None
-
-let completion_alias text line character =
-  let offset = byte_offset text line character in
-  let rec left index =
-    if index > 0 && is_identifier text.[index - 1] then left (index - 1) else index
-  in
-  let word_start = left offset in
-  if word_start = 0 || text.[word_start - 1] <> '.' then None else
-  let alias_end = word_start - 1 in
-  let alias_start = left alias_end in
-  if alias_start = alias_end then None
-  else Some (String.sub text alias_start (alias_end - alias_start))
-
-let qualified_occurrences text alias name =
-  identifier_occurrences text name
-  |> List.filter (fun (first, _last) ->
-      first > String.length alias
-      && text.[first - 1] = '.'
-      && String.sub text (first - String.length alias - 1) (String.length alias) = alias)
-
-let qualified_import_definition uri text start name =
-  match qualified_alias text start with
-  | None -> None
-  | Some alias ->
-      let current = path_of_uri uri in
-      let rec manifests = function
-        | [] -> None
-        | manifest :: rest ->
-            let base = Filename.dirname manifest in
-            let sources = project_symbols_document manifest in
-            match List.find_opt (fun (source : project_source) ->
-                String.equal (canonical_path (Filename.concat base source.path)) current) sources with
-            | None -> manifests rest
-            | Some source ->
-                begin match List.find_opt (fun item -> String.equal item.alias alias) source.imports with
-                | None -> manifests rest
-                | Some imported ->
-                    let target = canonical_path
-                      (Filename.concat (Filename.dirname current) imported.path) in
-                    begin match List.find_opt (fun (candidate : project_source) ->
-                        String.equal (canonical_path (Filename.concat base candidate.path)) target
-                        && List.mem name candidate.exports) sources with
-                    | None -> None
-                    | Some _ ->
-                        let target_uri = uri_of_path target in
-                        Option.bind (project_source_text target_uri target) (fun target_text ->
-                            Option.map (location target_uri target_text)
-                              (List.find_opt (fun symbol ->
-                                  symbol.kind = 12 && String.equal symbol.name name)
-                                (symbols target_text)))
-                    end
-                end
-      in
-      manifests (project_manifests ())
-
-let imported_forms uri =
-  let current = path_of_uri uri in
-  project_manifests () |> List.concat_map (fun manifest ->
-      let base = Filename.dirname manifest in
-      let sources = project_symbols_document manifest in
-      match List.find_opt (fun (source : project_source) ->
-          String.equal (canonical_path (Filename.concat base source.path)) current) sources with
-      | None -> []
-      | Some source -> source.imports |> List.concat_map (fun (item : project_import) ->
-          let target = canonical_path
-            (Filename.concat (Filename.dirname current) item.path) in
-          match List.find_opt (fun (candidate : project_source) ->
-              String.equal (canonical_path (Filename.concat base candidate.path)) target) sources with
-          | None -> []
-          | Some target_source -> target_source.symbols
-              |> List.filter (fun (symbol : compiler_symbol) ->
-                  String.equal symbol.kind "form" && List.mem symbol.name target_source.exports)
-              |> List.map (fun (symbol : compiler_symbol) ->
-                  item.alias ^ "." ^ symbol.name, symbol.typ)))
-
-let project_rename_imported uri text start name replacement : Yojson.Safe.t option =
-  match qualified_alias text start with
-  | None -> None
-  | Some alias ->
-      let current = path_of_uri uri in
-      let rec manifests = function
-        | [] -> None
-        | manifest :: rest ->
-            let base = Filename.dirname manifest in
-            let sources = project_symbols_document manifest in
-            match List.find_opt (fun (source : project_source) ->
-                String.equal (canonical_path (Filename.concat base source.path)) current) sources with
-            | None -> manifests rest
-            | Some owner ->
-                begin match List.find_opt (fun item -> String.equal item.alias alias) owner.imports with
-                | None -> None
-                | Some imported ->
-                    let target = canonical_path (Filename.concat (Filename.dirname current) imported.path) in
-                    match List.find_opt (fun (source : project_source) ->
-                        String.equal (canonical_path (Filename.concat base source.path)) target
-                        && List.mem name source.exports) sources with
-                    | None -> None
-                    | Some _ ->
-                        let edits = sources |> List.filter_map (fun (source : project_source) ->
-                            let path = canonical_path (Filename.concat base source.path) in
-                            let item_uri = uri_of_path path in
-                            match project_source_text item_uri path with
-                            | None -> None
-                            | Some source_text when String.equal path target ->
-                                let edits : Yojson.Safe.t list = semantic_occurrences source_text name
-                                  |> List.map (fun (first, last) -> text_edit source_text first last replacement) in
-                                Some (item_uri, edits)
-                            | Some source_text ->
-                                let aliases = source.imports
-                                  |> List.filter_map (fun (item : project_import) ->
-                                      let imported_path = canonical_path
-                                        (Filename.concat (Filename.dirname path) item.path) in
-                                      if String.equal imported_path target then Some item.alias else None) in
-                                let edits : Yojson.Safe.t list = aliases |> List.concat_map (fun alias ->
-                                    qualified_occurrences source_text alias name
-                                    |> List.map (fun (first, last) -> text_edit source_text first last replacement)) in
-                                if edits = [] then None else Some (item_uri, edits)) in
-                        let changes = List.map (fun (item_uri, edits) -> item_uri, `List edits) edits in
-                        Some ((`Assoc [ ("changes", `Assoc changes) ]) : Yojson.Safe.t)
-                end
-      in
-      manifests (project_manifests ())
-
-let project_references_imported uri text start name : Yojson.Safe.t list option =
-  match qualified_alias text start with
-  | None -> None
-  | Some alias ->
-      let current = path_of_uri uri in
-      let rec manifests = function
-        | [] -> None
-        | manifest :: rest ->
-            let base = Filename.dirname manifest in
-            let sources = project_symbols_document manifest in
-            match List.find_opt (fun (source : project_source) ->
-                String.equal (canonical_path (Filename.concat base source.path)) current) sources with
-            | None -> manifests rest
-            | Some owner ->
-                begin match List.find_opt (fun (item : project_import) -> String.equal item.alias alias) owner.imports with
-                | None -> None
-                | Some imported ->
-                    let target = canonical_path (Filename.concat (Filename.dirname current) imported.path) in
-                    if not (List.exists (fun (source : project_source) ->
-                        String.equal (canonical_path (Filename.concat base source.path)) target
-                        && List.mem name source.exports) sources) then None
-                    else
-                      let locations : Yojson.Safe.t list = sources |> List.concat_map (fun (source : project_source) ->
-                          let path = canonical_path (Filename.concat base source.path) in
-                          let item_uri = uri_of_path path in
-                          match project_source_text item_uri path with
-                          | None -> []
-                          | Some source_text when String.equal path target ->
-                              semantic_occurrences source_text name |> List.map (fun (first, last) ->
-                                  `Assoc [ ("uri", `String item_uri); ("range", range_from_offsets source_text first last) ])
-                          | Some source_text ->
-                              source.imports |> List.concat_map (fun (item : project_import) ->
-                                  let imported_path = canonical_path
-                                    (Filename.concat (Filename.dirname path) item.path) in
-                                  if not (String.equal imported_path target) then [] else
-                                  qualified_occurrences source_text item.alias name
-                                  |> List.map (fun (first, last) ->
-                                      `Assoc [ ("uri", `String item_uri); ("range", range_from_offsets source_text first last) ]))) in
-                      Some locations
-                end
-      in
-      manifests (project_manifests ())
 
 let project_workspace_symbols query =
   project_manifests ()
@@ -1720,7 +1624,7 @@ let project_workspace_symbols query =
 let workspace_symbols query =
   let open_symbols = open_documents ()
   |> List.concat_map (fun (uri, document) ->
-      Option.value ~default:[] (Hashtbl.find_opt symbol_cache document.text)
+      Option.value ~default:[] (Hashtbl.find_opt symbol_cache (document_key document))
       |> List.filter (fun (symbol : compiler_symbol) -> query = "" || case_contains symbol.name query)
       |> List.filter_map (fun (symbol : compiler_symbol) ->
           Option.map (fun location ->
@@ -1740,13 +1644,6 @@ let workspace_symbols query =
           end
       | _ -> true)
   |> List.append open_symbols
-
-let project_declaration_locations name =
-  project_workspace_symbols name
-  |> List.filter_map (fun item ->
-      match Util.member "name" item, Util.member "location" item with
-      | `String item_name, ((`Assoc _) as location) when String.equal item_name name -> Some location
-      | _ -> None)
 
 let signature_help document line character =
   let offset = byte_offset document.text line character in
@@ -1796,7 +1693,7 @@ let signature_help document line character =
   | None -> `Null
 
 let inlay_hints document =
-  Option.value ~default:[] (Hashtbl.find_opt symbol_cache document.text)
+  Option.value ~default:[] (Hashtbl.find_opt symbol_cache (document_key document))
   |> List.filter (fun (symbol : compiler_symbol) ->
       List.mem symbol.kind ["form"; "function"; "method"; "constructor"]
       && symbol.typ <> "")
@@ -1851,65 +1748,144 @@ let selection_range text line character =
   | Some (_, first, last) -> `Assoc [ ("range", range_from_offsets text first last); ("parent", parent) ]
   | None -> parent
 
-let code_actions uri params =
+let code_actions uri document params =
+  let range_coordinates range =
+    let coordinate name = Option.bind (object_member name range) (fun position ->
+      Option.bind (int_member "line" position) (fun line ->
+        Option.map (fun character -> line, character) (int_member "character" position))) in
+    Option.bind (coordinate "start") (fun first ->
+      Option.map (fun last -> first, last) (coordinate "end")) in
+  let current = Option.value ~default:[]
+      (Hashtbl.find_opt diagnostic_cache (document_key document))
+    |> List.map (diagnostic document.text) in
+  let current_diagnostic value = List.exists (fun known ->
+    Util.member "code" known = Util.member "code" value
+    && range_coordinates (Util.member "range" known)
+       = range_coordinates (Util.member "range" value)) current in
+  let action_for = function
+    | `Assoc _ as diagnostic when current_diagnostic diagnostic ->
+        begin match Util.member "code" diagnostic, Util.member "range" diagnostic with
+        | `String code, range ->
+            let action title replacement =
+              `Assoc [
+                ("title", `String title);
+                ("kind", `String "quickfix");
+                ("isPreferred", `Bool false);
+                ("diagnostics", `List [diagnostic]);
+                ("edit", `Assoc [
+                  ("changes", `Assoc [
+                    (uri, `List [ `Assoc [
+                      ("range", range);
+                      ("newText", `String replacement);
+                    ] ]);
+                  ]);
+                ]);
+              ] in
+            begin match code with
+            | "AMLC101" -> [ action "Insert missing ')'" ")" ]
+            | "AMLC102" -> [ action "Insert missing '}'" "}" ]
+            | "AMLC103" -> [ action "Insert missing ']'" "]" ]
+            | "AMLC104" -> [ action "Insert missing ','" "," ]
+            | "AMLC105" -> [ action "Insert missing 'in'" "in " ]
+            | "AMLC106" -> [ action "Insert missing 'then'" "then " ]
+            | "AMLC107" -> [ action "Insert missing 'else'" "else " ]
+            | "AMLC108" -> [ action "Insert missing ':'" ": " ]
+            | "REHOVOT101" -> [ action "Insert missing ':'" ": " ]
+            | "REHOVOT102" -> [ action "Insert missing '}'" "}" ]
+            | "REHOVOT103" -> [ action "Insert missing ')'" ")" ]
+            | "REHOVOT104" -> [ action "Insert missing ']'" "]" ]
+            | "REHOVOT105" -> [ action "Insert missing ','" "," ]
+            | "REHOVOT001" -> [ action "Use canonical 'contract'" "contract" ]
+            | "REHOVOT002" -> [ action "Use canonical 'program'" "program" ]
+            | _ -> []
+            end
+        | _ -> []
+        end
+    | _ -> [] in
   match Util.member "context" params with
   | `Assoc fields ->
-      begin
-        match List.assoc_opt "diagnostics" fields with
-        | Some (`List (`Assoc diagnostic :: _)) ->
-            begin
-              match List.assoc_opt "code" diagnostic, List.assoc_opt "range" diagnostic with
-              | Some (`String code), Some range ->
-                  let action title replacement =
-                    `Assoc [
-                      ("title", `String title);
-                      ("kind", `String "quickfix");
-                      ("isPreferred", `Bool false);
-                      ("edit", `Assoc [
-                        ("changes", `Assoc [
-                          (uri, `List [ `Assoc [
-                            ("range", range);
-                            ("newText", `String replacement);
-                          ] ]);
-                        ]);
-                      ]);
-                    ]
-                  in
-                  let actions = match code with
-                    | "AMLC101" -> [ action "Insert missing ')'" ")" ]
-                    | "AMLC102" -> [ action "Insert missing '}'" "}" ]
-                    | "AMLC103" -> [ action "Insert missing ']'" "]" ]
-                    | "AMLC104" -> [ action "Insert missing ','" "," ]
-                    | "AMLC105" -> [ action "Insert missing 'in'" "in " ]
-                    | "AMLC106" -> [ action "Insert missing 'then'" "then " ]
-                    | "AMLC107" -> [ action "Insert missing 'else'" "else " ]
-                    | "AMLC108" -> [ action "Insert missing ':'" ": " ]
-                    | "AMLC100" -> [ action "Insert unit expression" "unit " ]
-                    | "REHOVOT101" -> [ action "Insert missing ':'" ": " ]
-                    | "REHOVOT102" -> [ action "Insert missing '}'" "}" ]
-                    | "REHOVOT103" -> [ action "Insert missing ')'" ")" ]
-                    | "REHOVOT104" -> [ action "Insert missing ']'" "]" ]
-                    | "REHOVOT105" -> [ action "Insert missing ','" "," ]
-                    | "REHOVOT001" -> [ action "Use canonical 'contract'" "contract" ]
-                    | "REHOVOT002" -> [ action "Use canonical 'program'" "program" ]
-                    | _ -> []
-                  in
-                  `List actions
-              | _ -> `List []
-            end
-        | _ -> `List []
-      end
+      (match List.assoc_opt "diagnostics" fields with
+       | Some (`List diagnostics) -> `List (List.concat_map action_for diagnostics)
+       | _ -> `List [])
   | _ -> `List []
+
+let editor_locations result =
+  match result with
+  | `Assoc _ as result ->
+      (match string_member "path" result, int_member "start" result, int_member "end" result with
+       | Some path, Some first, Some last ->
+           (try
+              let uri, text = match open_document_at_path path with
+                | Some (uri, target) -> uri, target.text
+                | None -> uri_of_path path, In_channel.with_open_bin path In_channel.input_all in
+              (* Use ranges only with the exact snapshot queried by the helper. *)
+              let unchanged = match string_member "sourceHash" result with
+                | Some hash -> hash = Digest.to_hex (Digest.string text)
+                | None -> text = In_channel.with_open_bin path In_channel.input_all in
+              if unchanged && first >= 0 && last >= first && last <= String.length text then
+                [`Assoc ["uri", `String uri; "range", range_from_offsets text first last]]
+              else []
+            with Sys_error _ -> [])
+       | _ -> [])
+  | _ -> []
+
+let imported_definition document offset =
+  editor_locations (compiler_editor_query document "--definition=json" offset)
+
+let rename_workspace_edit replacement result =
+  let items = match result with
+    | `Assoc fields -> (match List.assoc_opt "items" fields with Some (`List items) -> items | _ -> [])
+    | _ -> [] in
+  let locations = List.map (function
+    | `Assoc _ as item when string_member "sourceHash" item <> None -> editor_locations item
+    | _ -> []) items in
+  let invalid_target = function
+    | [location] ->
+        (match Option.bind (string_member "uri" location) (Hashtbl.find_opt documents) with
+         | Some { version = None; _ } -> true
+         | _ -> false)
+    | _ -> true in
+  if items = [] || List.exists invalid_target locations then `Null else
+  let edits = Hashtbl.create 16 in
+  List.iter (fun locations ->
+    let location = List.hd locations in
+    let uri = Util.member "uri" location |> Util.to_string in
+    let edit = `Assoc ["range", Util.member "range" location; "newText", `String replacement] in
+    Hashtbl.replace edits uri (edit :: Option.value ~default:[] (Hashtbl.find_opt edits uri))) locations;
+  `Assoc ["documentChanges", `List (Hashtbl.fold (fun uri edits all -> (uri, edits) :: all) edits []
+    |> List.sort compare |> List.map (fun (uri, edits) ->
+      let version = match Hashtbl.find_opt documents uri with
+        | Some { version = Some version; _ } -> `Int version | _ -> `Null in
+      `Assoc ["textDocument", `Assoc ["uri", `String uri; "version", version];
+        "edits", `List (List.rev edits)]))]
 
 let request_result method_name params =
   let document = Option.bind (uri_from_params params) (fun uri ->
       Option.map (fun document -> uri, document) (Hashtbl.find_opt documents uri)) in
+  Option.iter (fun (_, document) ->
+    if Hashtbl.mem diagnostic_cache (document_key document) then remember_analysis (document_key document)) document;
   match method_name, document with
   | "textDocument/diagnostic", Some (_uri, document) ->
-      let diagnostics = Option.value ~default:[] (Hashtbl.find_opt diagnostic_cache document.text) in
+      let diagnostics = Option.value ~default:[] (Hashtbl.find_opt diagnostic_cache (document_key document)) in
       `Assoc [ ("kind", `String "full"); ("items", `List (List.map (diagnostic document.text) diagnostics)) ]
   | "workspace/symbol", _ ->
       `List (workspace_symbols (Option.value ~default:"" (string_member "query" params)))
+  | ("textDocument/definition" | "textDocument/declaration"), Some (uri, document)
+    when Option.is_some !library_analyzer ->
+      let location = Option.bind (position_from_params params) (fun (line, character) ->
+        Option.bind (compiler_occurrence_at document line character)
+          (fun (symbol, _, _, _) -> compiler_location uri document.text symbol)) in
+      `List (Option.to_list location)
+  | "textDocument/hover", Some (_uri, document) when Option.is_some !library_analyzer ->
+      let hover = Option.bind (position_from_params params) (fun (line, character) ->
+        Option.map (fun (symbol, _, first, last) ->
+          `Assoc [
+            "contents", `Assoc ["kind", `String "plaintext";
+              "value", `String (Option.value ~default:symbol.name symbol.signature)];
+            "range", `Assoc ["start", lsp_position document.text first;
+              "end", lsp_position document.text last]
+          ]) (compiler_occurrence_at document line character)) in
+      Option.value ~default:`Null hover
   | "textDocument/hover", Some (_uri, document) ->
       begin
         match position_from_params params with
@@ -1918,7 +1894,7 @@ let request_result method_name params =
               match word_at document.text line character with
               | Some (word, _, _) ->
                   begin match List.find_opt (fun (symbol : compiler_symbol) -> String.equal symbol.name word)
-                    (Option.value ~default:[] (Hashtbl.find_opt symbol_cache document.text)) with
+                    (Option.value ~default:[] (Hashtbl.find_opt symbol_cache (document_key document))) with
                   | Some symbol ->
                       let typ = Option.value ~default:symbol.typ symbol.signature in
                       `Assoc [ ("contents", `Assoc [ ("kind", `String "markdown");
@@ -1936,35 +1912,86 @@ let request_result method_name params =
             begin
               match word_at document.text line character with
               | Some (word, _, _) ->
-                  Option.value ~default:(`List [])
-                    (Option.map (fun location -> `List [ location ])
-                      (Option.bind
-                        (List.find_opt (fun (symbol : compiler_symbol) ->
-                           String.equal symbol.name word)
-                          (Option.value ~default:[] (Hashtbl.find_opt symbol_cache document.text)))
-                        (compiler_location uri document.text)))
+                  let local = Option.bind
+                    (List.find_opt (fun (symbol : compiler_symbol) -> String.equal symbol.name word)
+                      (Option.value ~default:[] (Hashtbl.find_opt symbol_cache (document_key document))))
+                    (compiler_location uri document.text) in
+                  (match local with
+                   | Some location -> `List [location]
+                   | None -> `List (imported_definition document (byte_offset document.text line character)))
               | None -> `List []
             end
         | None -> `List []
       end
-  | "textDocument/completion", Some _ ->
+  | "textDocument/completion", Some (_, current) ->
       let compiler_items =
         Option.value ~default:[] (Option.map (fun (_uri, document) ->
-          Option.value ~default:[] (Hashtbl.find_opt symbol_cache document.text)) document)
+          Option.value ~default:[] (Hashtbl.find_opt symbol_cache (document_key document))) document)
+        |> List.filter (fun (symbol : compiler_symbol) ->
+            if Option.is_none !library_analyzer then true
+            else if List.mem symbol.kind ["constructor"; "enumMember"; "field"] then false
+            else if not (scoped_symbol symbol) then true else
+            match position_from_params params with
+            | Some cursor -> List.exists (fun (first, last) ->
+                (first.line, first.character) <= cursor &&
+                (cursor < (last.line, last.character) ||
+                 (Option.is_none symbol.selection_start && cursor = (last.line, last.character)
+                  && last.offset = Some (String.length current.text)))) symbol.completion_scopes
+            | _ -> false)
+        |> (fun symbols -> if Option.is_none !library_analyzer then symbols else
+            let locals, others = List.partition scoped_symbol symbols in
+            (* Recovered EOF ranges may share an inclusive endpoint. Prefer the
+               innermost matching scope before deduplicating same-named items. *)
+            let cursor = position_from_params params in
+            let start symbol = match cursor with
+              | None -> -1, -1
+              | Some cursor -> List.fold_left (fun latest (first, last) ->
+                  let first = first.line, first.character and last = last.line, last.character in
+                  if first <= cursor && cursor <= last then max latest first else latest)
+                  (-1, -1) symbol.completion_scopes in
+            let locals = List.stable_sort (fun a b -> compare (start b) (start a)) locals in
+            locals @ others)
         |> List.map symbol_completion_item
       in
       let keywords = match document with
         | None -> legacy_completion_keywords
         | Some (_uri, document) -> completion_keywords_for document.text
       in
+      let local_items, member = match position_from_params params with
+        | Some (line, character) ->
+            let offset = byte_offset current.text line character in
+            let rec start i = if i > 0 && is_identifier current.text.[i - 1] then start (i - 1) else i in
+            let first = start offset in
+            let items, suppress = if Option.is_none !library_analyzer then compiler_completions current offset
+              else
+                let sites = Option.value ~default:[] (Hashtbl.find_opt member_cache (document_key current)) in
+                match List.find_opt (fun site ->
+                  (site.member_start.line, site.member_start.character) <= (line, character)
+                  && (line, character) <= (site.member_end.line, site.member_end.character)) sites with
+                | Some site -> site.member_items, true
+                | None -> [], false in
+            items, suppress || (first > 0 && current.text.[first - 1] = '.')
+        | None -> [], false in
+      let keyword_items = List.map completion_item keywords in
+      let items = if member then local_items else local_items @
+        (if Option.is_some !library_analyzer then compiler_items @ keyword_items
+         else keyword_items @ compiler_items) in
+      let seen = Hashtbl.create 32 in
+      let items = List.filter (fun item -> match string_member "label" item with
+        | None -> false
+        | Some label when Hashtbl.mem seen label -> false
+        | Some label -> Hashtbl.add seen label (); true) items in
       `Assoc [
-        ("isIncomplete", `Bool false);
-        ("items", `List (List.map completion_item keywords @ compiler_items));
+        ("isIncomplete", `Bool (Option.is_some !library_analyzer &&
+          Hashtbl.find_opt diagnostic_cache (document_key current) <> Some []));
+        ("items", `List items);
       ]
   | "textDocument/documentSymbol", Some (_uri, document) ->
-      `List (Option.value ~default:[] (Hashtbl.find_opt symbol_cache document.text)
+      `List (Option.value ~default:[] (Hashtbl.find_opt symbol_cache (document_key document))
         |> List.filter_map (fun (symbol : compiler_symbol) ->
             match symbol.selection_start, symbol.selection_end with
+            | _ when Option.is_some !library_analyzer
+                && (scoped_symbol symbol || symbol.kind = "import") -> None
             | Some start_position, Some end_position ->
                 Some (`Assoc [
                   ("name", `String symbol.name); ("kind", `Int (lsp_symbol_kind symbol.kind));
@@ -1979,6 +2006,25 @@ let request_result method_name params =
                 ])
             | _ -> None))
   | "textDocument/references", Some (uri, document) ->
+      if Option.is_some !library_analyzer
+        && Hashtbl.find_opt diagnostic_cache (document_key document) <> Some [] then `List []
+      else if Option.is_none !library_analyzer && is_appliedml_contract document.text then
+        (match position_from_params params with
+         | Some (line, character) ->
+             let include_declaration = match object_member "context" params with
+               | Some context -> Util.member "includeDeclaration" context = `Bool true
+               | None -> false in
+             (match compiler_editor_query document "--references=json" (byte_offset document.text line character) with
+              | `Assoc _ as result ->
+                  if Util.member "complete" result <> `Bool true then
+                    Jsonrpc.log "references: workspace analysis is incomplete; returning verified matches only";
+                  let references = match Util.member "items" result with `List items -> items | _ -> [] in
+                  `List (references |> List.concat_map (fun reference ->
+                  if include_declaration || string_member "role" reference <> Some "declaration"
+                  then editor_locations reference else []))
+              | _ -> `List [])
+         | None -> `List [])
+      else
       begin
         match position_from_params params with
         | Some (line, character) ->
@@ -1989,49 +2035,109 @@ let request_result method_name params =
                   | Some context -> (match Util.member "includeDeclaration" context with `Bool value -> value | _ -> false)
                   | None -> false
                 in
-                `List (compiler_occurrence_locations ~include_declaration uri document.text symbol)
+                let local () = `List (compiler_occurrence_locations
+                  ~include_declaration uri document.text symbol) in
+                if Option.is_some !library_analyzer && List.mem symbol.kind ["interface"; "import"] then
+                  (match library_workspace_query "references" document line character None with
+                   | Some (`Assoc _ as result) ->
+                       if Util.member "complete" result <> `Bool true then
+                         Jsonrpc.log "references: workspace analysis is incomplete; returning verified matches only";
+                       let items = match Util.member "items" result with `List items -> items | _ -> [] in
+                       let locations = items |> List.concat_map (fun item ->
+                         if include_declaration || string_member "role" item <> Some "declaration"
+                         then editor_locations item else []) in
+                       if locations = [] then local () else `List locations
+                   | _ -> local ())
+                else local ()
             | None -> `List []
             end
         | None -> `List []
       end
   | "textDocument/prepareRename", Some (_uri, document) ->
+      if Option.is_none !library_analyzer && is_appliedml_contract document.text then
+        (match position_from_params params with
+         | Some (line, character) when !supports_document_changes ->
+             let result = compiler_editor_query document "--rename=json" (byte_offset document.text line character) in
+             let name = match result with `Assoc _ -> string_member "name" result | _ -> None in
+             (match name, word_at document.text line character with
+              | Some name, Some (_, first, last) when rename_workspace_edit name result <> `Null ->
+                  `Assoc ["placeholder", `String name; "range", range_from_offsets document.text first last]
+              | _ -> `Null)
+         | _ -> `Null)
+      else if Option.is_some !library_analyzer
+          && Hashtbl.find_opt diagnostic_cache (document_key document) <> Some [] then `Null
+      else
       begin match position_from_params params with
       | Some (line, character) ->
           begin match compiler_occurrence_at document line character with
           | Some (symbol, _, start_position, end_position) ->
-              `Assoc [
-                ("range", `Assoc [
-                  ("start", lsp_position document.text start_position);
-                  ("end", lsp_position document.text end_position);
-                ]);
-                ("placeholder", `String symbol.name);
-              ]
+              let prepared = `Assoc [
+                  ("range", `Assoc [
+                    ("start", lsp_position document.text start_position);
+                    ("end", lsp_position document.text end_position);
+                  ]);
+                  ("placeholder", `String symbol.name);
+                ] in
+              if Option.is_some !library_analyzer && List.mem symbol.kind ["interface"; "import"] then
+                if not !supports_document_changes then `Null else
+                (match library_workspace_query "rename" document line character None with
+                 | Some (`Assoc _ as result) when rename_workspace_edit symbol.name result <> `Null -> prepared
+                 | _ -> `Null)
+              else if Option.is_none !library_analyzer || compiler_rename_safe document symbol
+              then prepared else `Null
           | None -> `Null
           end
       | None -> `Null
       end
   | "textDocument/rename", Some (uri, document) ->
+      if Option.is_none !library_analyzer && is_appliedml_contract document.text then
+        (match position_from_params params, string_member "newName" params with
+         | Some (line, character), Some replacement
+             when !supports_document_changes && valid_rename_identifier replacement ->
+             rename_workspace_edit replacement
+               (compiler_editor_query ~replacement document "--rename=json" (byte_offset document.text line character))
+         | _ -> `Null)
+      else if Option.is_some !library_analyzer
+          && Hashtbl.find_opt diagnostic_cache (document_key document) <> Some [] then `Null
+      else
       begin
         match position_from_params params, string_member "newName" params with
         | Some (line, character), Some replacement ->
             begin
               match compiler_occurrence_at document line character with
-              | Some (symbol, _, _, _) when valid_identifier replacement ->
-                  let symbols = Option.value ~default:[] (Hashtbl.find_opt symbol_cache document.text) in
-                  if not (List.exists (fun (other : compiler_symbol) ->
-                      String.equal other.name replacement && other.id <> symbol.id) symbols)
-                  then `Assoc [ ("changes", `Assoc [
-                        (uri, `List (compiler_occurrence_edits document.text replacement symbol));
-                      ]) ]
-                  else `Null
+              | Some (symbol, _, _, _) when valid_rename_identifier replacement ->
+                  let local_rename () =
+                    let symbols = Option.value ~default:[] (Hashtbl.find_opt symbol_cache (document_key document)) in
+                    if (Option.is_none !library_analyzer || compiler_rename_safe document symbol)
+                      && (replacement = symbol.name
+                          || not (source_has_identifier document.text replacement))
+                      && not (List.exists (fun (other : compiler_symbol) ->
+                        String.equal other.name replacement && not (same_compiler_symbol other symbol)) symbols)
+                    then `Assoc [ ("changes", `Assoc [
+                          (uri, `List (compiler_occurrence_edits document.text replacement symbol));
+                        ]) ]
+                    else `Null in
+                  if Option.is_some !library_analyzer && List.mem symbol.kind ["interface"; "import"]
+                      && Option.is_some !library_workspace_analyzer then
+                    if not !supports_document_changes then `Null else
+                    (match library_workspace_query "rename" document line character (Some replacement) with
+                     | Some result -> rename_workspace_edit replacement result
+                     | None -> `Null)
+                  else local_rename ()
               | _ -> `Null
             end
         | _ -> `Null
       end
-  | "textDocument/codeAction", Some (_uri, _document) ->
-      code_actions (Option.value ~default:"" (uri_from_params params)) params
+  | "textDocument/codeAction", Some (_uri, document) ->
+      code_actions (Option.value ~default:"" (uri_from_params params)) document params
   | "textDocument/signatureHelp", Some (_uri, document) ->
       begin match position_from_params params with
+      | Some (line, character) when Option.is_some !library_analyzer ->
+          let sites = Option.value ~default:[] (Hashtbl.find_opt signature_cache (document_key document)) in
+          (match List.find_opt (fun site ->
+              (site.signature_start.line, site.signature_start.character) <= (line, character)
+              && (line, character) <= (site.signature_end.line, site.signature_end.character)) sites with
+           | Some site -> site.signature_help | None -> `Null)
       | Some (line, character) -> signature_help document line character
       | None -> `Null
       end
@@ -2049,6 +2155,24 @@ let request_result method_name params =
               Option.map (fun character -> selection_range document.text line character) (int_member "character" position))) positions)
       | _ -> `List []
       end
+  | "textDocument/formatting", Some (_, document) when Option.is_some !library_analyzer ->
+      let options = Util.member "options" params in
+      let size = Option.value ~default:2 (int_member "tabSize" options) in
+      if size < 1 || size > 16 then `List [] else
+      let spaces = Util.member "insertSpaces" options <> `Bool false in
+      let lines = Array.of_list (String.split_on_char '\n' document.text) in
+      let layout = Option.join (Hashtbl.find_opt formatting_cache (document_key document)) in
+      let bytes = ref (String.length document.text) in
+      let edits = Option.value ~default:[] layout |> List.filter_map (fun (line, width, depth) ->
+        if !bytes > max_document_bytes then None else
+        let replacement = String.make (if spaces then depth * size else depth) (if spaces then ' ' else '\t') in
+        bytes := !bytes + String.length replacement - width;
+        if String.sub lines.(line) 0 width = replacement then None else
+        Some (`Assoc ["range", `Assoc [
+          "start", `Assoc ["line", `Int line; "character", `Int 0];
+          "end", `Assoc ["line", `Int line; "character", `Int width]];
+          "newText", `String replacement])) in
+      if !bytes > max_document_bytes then `List [] else `List edits
   | "textDocument/formatting", Some (uri, document) ->
       if has_multiline_sensitive_lexeme document.text then `List [] else
       let formatted = format_document document.text in
@@ -2057,8 +2181,8 @@ let request_result method_name params =
       else `List [ text_edit document.text 0 (String.length document.text) formatted ]
   | "textDocument/semanticTokens/full", Some (_uri, document) ->
       semantic_tokens document.text
-        (Option.value ~default:[] (Hashtbl.find_opt symbol_cache document.text))
-        (Option.value ~default:[] (Hashtbl.find_opt semantic_token_cache document.text))
+        (Option.value ~default:[] (Hashtbl.find_opt symbol_cache (document_key document)))
+        (Option.value ~default:[] (Hashtbl.find_opt semantic_token_cache (document_key document)))
   | "textDocument/diagnostic", None -> `Assoc [ ("kind", `String "full"); ("items", `List []) ]
   | "textDocument/hover", None -> `Null
   | "textDocument/definition", None | "textDocument/declaration", None | "textDocument/documentSymbol", None
@@ -2070,10 +2194,52 @@ let request_result method_name params =
   | "textDocument/rename", None | "textDocument/prepareRename", None | "textDocument/signatureHelp", None -> `Null
   | _ -> `Null
 
+let cancel_editor_requests output predicate code message =
+  let cancelled, retained = List.partition predicate !editor_requests in
+  editor_requests := retained;
+  List.iter (fun request -> Jsonrpc.write output (error_response request.request_id code message)) cancelled
+
+let flush_editor_requests output =
+  let now = Unix.gettimeofday () in
+  let ready, waiting = List.partition (fun request ->
+    match Hashtbl.find_opt documents request.snapshot.uri with
+    | Some current when current = request.snapshot && !dialect_override = request.dialect ->
+        Hashtbl.mem diagnostic_cache (document_key current) || now >= request.deadline
+    | _ -> true) !editor_requests in
+  editor_requests := waiting;
+  List.iter (fun request ->
+    let message = match Hashtbl.find_opt documents request.snapshot.uri with
+      | Some current when current = request.snapshot && !dialect_override = request.dialect ->
+          response request.request_id (request_result request.method_name request.params)
+      | _ -> error_response request.request_id (-32801) "document changed while awaiting analysis" in
+    Jsonrpc.write output message) ready
+
+let defer_editor_request id method_name params =
+  if Option.is_none !library_analyzer
+    || not (List.mem method_name ["textDocument/completion"; "textDocument/signatureHelp";
+      "textDocument/formatting"; "textDocument/semanticTokens/full"; "textDocument/hover";
+      "textDocument/definition"; "textDocument/declaration"; "textDocument/references";
+      "textDocument/prepareRename"; "textDocument/rename";
+      "textDocument/documentSymbol"; "textDocument/diagnostic"])
+    || List.length !editor_requests >= max_editor_requests then false else
+  let has_position = List.mem method_name ["textDocument/formatting"; "textDocument/semanticTokens/full";
+    "textDocument/documentSymbol"; "textDocument/diagnostic"]
+    || Option.is_some (position_from_params params) in
+  match Option.bind (uri_from_params params) (Hashtbl.find_opt documents), has_position with
+  | Some document, true when not (Hashtbl.mem diagnostic_cache (document_key document)) ->
+      let now = Unix.gettimeofday () in
+      editor_requests := !editor_requests @ [{ request_id = id; method_name; params;
+        snapshot = document; dialect = !dialect_override; deadline = now +. editor_wait_seconds }];
+      (* Reuse an active worker; only expedite a debounced/missing check. *)
+      if not (Hashtbl.mem diagnostic_jobs document.uri) then
+        Hashtbl.replace pending_checks document.uri (document, now);
+      true
+  | _ -> false
+
 let document_from_params params =
   match object_member "textDocument" params with
   | Some document -> Option.bind (string_member "uri" document) (fun uri ->
-      Option.map (fun text -> (uri, { text; version = int_member "version" document })) (string_member "text" document))
+      Option.map (fun text -> (uri, { uri; text; version = int_member "version" document })) (string_member "text" document))
   | None -> None
 
 let changed_document params =
@@ -2106,7 +2272,7 @@ let changed_document params =
                         end
                     end
               in
-              Option.map (fun text -> uri, { text; version = int_member "version" document })
+              Option.map (fun text -> uri, { uri; text; version = int_member "version" document })
                 (List.fold_left (fun text change -> Option.bind text (fun value -> apply value change)) (Some current.text) changes)
           end
       | _ -> None)
@@ -2117,7 +2283,7 @@ let handle_notification output method_name params =
     | Some (uri, document) ->
         Hashtbl.replace documents uri document;
         Hashtbl.remove pending_checks uri;
-        schedule_diagnostics uri document
+        refresh_open_diagnostics ~changed:uri ()
     | None -> Jsonrpc.log ("ignored malformed " ^ method_name ^ " notification")
   in
   let change_document document = match document with
@@ -2125,8 +2291,7 @@ let handle_notification output method_name params =
         let unchanged = match Hashtbl.find_opt documents uri with Some previous -> String.equal previous.text document.text | None -> false in
         Hashtbl.replace documents uri document;
         if not unchanged then begin
-          Hashtbl.reset project_symbol_cache;
-          schedule_diagnostics uri document
+          refresh_open_diagnostics ~changed:uri ()
         end
     | None -> Jsonrpc.log ("ignored malformed " ^ method_name ^ " notification")
   in
@@ -2141,21 +2306,21 @@ let handle_notification output method_name params =
         Hashtbl.iter (fun uri document -> schedule_diagnostics uri document) documents) configured
   in
   match method_name with
+  | "$/cancelRequest" ->
+      let id = Util.member "id" params in
+      cancel_editor_requests output (fun request -> request.request_id = id) (-32800) "request cancelled"
   | "textDocument/didOpen" -> open_document (document_from_params params)
   | "textDocument/didChange" -> change_document (changed_document params)
   | "textDocument/didSave" -> (match Option.bind (object_member "textDocument" params) (string_member "uri") with
-      | Some uri ->
-          Hashtbl.reset project_symbol_cache;
-          begin match Hashtbl.find_opt documents uri with
-          | Some document -> schedule_diagnostics uri document
-          | None -> ()
-          end
+      | Some uri -> refresh_open_diagnostics ~changed:uri ()
       | None -> Jsonrpc.log "ignored malformed textDocument/didSave notification")
   | "textDocument/didClose" -> (match Option.bind (object_member "textDocument" params) (string_member "uri") with
       | Some uri ->
           Hashtbl.remove documents uri;
+          Hashtbl.remove document_dependencies uri;
           Hashtbl.remove pending_checks uri;
           cancel_diagnostic_job uri;
+          refresh_open_diagnostics ~changed:uri ();
           publish output uri []
       | None -> Jsonrpc.log "ignored malformed textDocument/didClose notification")
   | "workspace/didChangeWorkspaceFolders" -> apply_workspace_folder_change params
@@ -2169,17 +2334,29 @@ let handle_message output message =
   let params = Util.member "params" message in
   let id = Util.member "id" message in
   match (method_name, id) with
+  | Some "exit", `Null -> raise Exit
   | Some "initialize", id when id <> `Null && not !initialized ->
       workspace_roots := workspace_roots_from_params params;
+      supports_document_changes :=
+        (match Option.bind (object_member "capabilities" params) (object_member "workspace")
+          |> fun workspace -> Option.bind workspace (object_member "workspaceEdit") with
+         | Some edit -> Util.member "documentChanges" edit = `Bool true
+         | None -> false);
       Option.iter (fun options ->
           Option.iter (fun value -> set_dialect_override (dialect_of_string (String.lowercase_ascii value)))
             (string_member "dialect" options))
         (object_member "initializationOptions" params);
       initialized := true;
-      Jsonrpc.write output (response id initialize_result)
+      Jsonrpc.write output (response id (initialized_result ()))
   | Some "initialize", id when id <> `Null -> Jsonrpc.write output (error_response id (-32600) "server already initialized")
-  | Some "shutdown", id when id <> `Null && !initialized -> shutting_down := true; Jsonrpc.write output (response id `Null)
+  | Some "shutdown", id when id <> `Null && !initialized ->
+      cancel_editor_requests output (fun _ -> true) (-32800) "server shutting down";
+      shutting_down := true; Jsonrpc.write output (response id `Null)
   | Some "shutdown", id when id <> `Null -> Jsonrpc.write output (error_response id (-32002) "server is not initialized")
+  | Some method_name, id when id <> `Null && !initialized && not !shutting_down
+      && Option.is_some !library_analyzer && not (List.mem method_name library_methods) ->
+      Jsonrpc.write output (error_response id (-32601)
+        ("unsupported by official AMLC analysis: " ^ method_name))
   | Some method_name, `Null when !initialized && not !shutting_down -> handle_notification output method_name params
   | Some method_name, id when id <> `Null && !initialized && not !shutting_down ->
       begin
@@ -2193,27 +2370,91 @@ let handle_message output message =
         | "textDocument/documentHighlight" | "textDocument/foldingRange"
         | "textDocument/selectionRange" | "textDocument/formatting"
         | "textDocument/semanticTokens/full" | "workspace/symbol" ->
-            Jsonrpc.write output (response id (request_result method_name params))
+            if not (defer_editor_request id method_name params) then
+              Jsonrpc.write output (response id (request_result method_name params))
         | _ -> Jsonrpc.write output (error_response id (-32601) ("unsupported method: " ^ method_name))
       end
   | Some _, `Null -> ()
   | Some method_name, id -> Jsonrpc.write output (error_response id (-32601) ("unsupported method: " ^ method_name))
   | None, _ -> Jsonrpc.log "ignored message without a method"
 
-let run () =
+let run ?analyze ?workspace_analyze () =
+  library_analyzer := analyze;
+  library_workspace_analyzer := workspace_analyze;
+  set_binary_mode_in stdin true;
+  set_binary_mode_out stdout true;
+  if Array.length Sys.argv = 4 && Sys.argv.(1) = windows_worker_flag
+      && Option.is_some !library_analyzer then begin
+    let result =
+      try
+        let stat = Unix.stat Sys.argv.(2) in
+        if stat.st_kind <> Unix.S_REG
+          || stat.st_size > max_document_bytes + max_worker_overlay_bytes + 262_144
+        then Error "worker request exceeded the input limit"
+        else
+          let request = Yojson.Safe.from_file Sys.argv.(2) in
+          begin match string_member "dialect" request with
+            | Some value -> set_dialect_override (dialect_of_string value)
+            | None -> set_dialect_override None
+          end;
+          begin match Util.member "documents" request with
+            | `List values -> List.iter (fun value ->
+                match string_member "uri" value, string_member "text" value with
+                | Some uri, Some text when String.length text <= max_document_bytes ->
+                    Hashtbl.replace documents uri {
+                      uri; text; version = int_member "version" value }
+                | _ -> ()) values
+            | _ -> ()
+          end;
+          match string_member "uri" request, string_member "text" request with
+          | Some uri, Some text -> Ok (analyze_document uri text)
+          | _ -> Error "worker received an invalid request"
+      with error -> Error (Printexc.to_string error)
+    in
+    Out_channel.with_open_bin Sys.argv.(3) (fun channel -> Marshal.to_channel channel result []);
+    exit (if Result.is_ok result then 0 else 1)
+  end;
   try
-    while true do
-      let stdin_fd = Unix.descr_of_in_channel stdin in
-      let job_fds = Hashtbl.to_seq_values diagnostic_jobs |> List.of_seq
-        |> List.filter (fun job -> not job.eof)
-        |> List.map (fun job -> job.output) in
-      let readable, _, _ = Unix.select (stdin_fd :: job_fds) [] [] (next_check_timeout ()) in
-      if List.mem stdin_fd readable then (
-        match Jsonrpc.read stdin with
-        | Some message -> (try handle_message stdout message with error -> Jsonrpc.log (Printexc.to_string error))
-        | None -> raise Exit);
-      poll_diagnostic_jobs stdout readable;
-      flush_due_diagnostics stdout
-    done
+    if Sys.win32 && Option.is_some !library_analyzer then begin
+      (* A reader thread lets the main loop preserve debounce while a native
+         Windows stdin pipe has no portable [select]. Drain each burst before
+         starting the bounded one-shot worker, so rapid edits analyze only the
+         latest document snapshot. *)
+      let pop_input = windows_input_reader () in
+      while true do
+        let handled = ref false in
+        let rec drain () = match pop_input () with
+          | Some (Input_message message) ->
+              handled := true;
+              (try handle_message stdout message with
+               | Exit -> raise Exit
+               | error -> Jsonrpc.log (Printexc.to_string error));
+              drain ()
+          | Some Input_end -> raise Exit
+          | Some (Input_error error) -> raise error
+          | None -> () in
+        drain ();
+        flush_pending_diagnostics_windows stdout;
+        flush_editor_requests stdout;
+        if not !handled then Thread.delay 0.01
+      done
+    end
+    else
+      while true do
+        let stdin_fd = Unix.descr_of_in_channel stdin in
+        let job_fds = Hashtbl.to_seq_values diagnostic_jobs |> List.of_seq
+          |> List.filter (fun job -> not job.eof)
+          |> List.map (fun job -> job.output) in
+        let readable, _, _ = Unix.select (stdin_fd :: job_fds) [] [] (next_check_timeout ()) in
+        if List.mem stdin_fd readable then (
+          match Jsonrpc.read_fd stdin_fd with
+          | Some message -> (try handle_message stdout message with
+              | Exit -> raise Exit
+              | error -> Jsonrpc.log (Printexc.to_string error))
+          | None -> raise Exit);
+        poll_diagnostic_jobs stdout readable;
+        flush_due_diagnostics stdout;
+        flush_editor_requests stdout
+      done
   with Exit ->
     Hashtbl.to_seq_keys diagnostic_jobs |> List.of_seq |> List.iter cancel_diagnostic_job

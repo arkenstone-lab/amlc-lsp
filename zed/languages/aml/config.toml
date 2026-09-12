@@ -1,4 +1,4 @@
-name = "AML"
+name = "AppliedML"
 grammar = "aml"
 path_suffixes = ["aml"]
 line_comments = ["// "]

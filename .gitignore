@@ -1,4 +1,13 @@
 _build/
+# Local dependencies and test/editor caches.
+_opam/
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+/nvim.log
+*.swp
+*.swo
 .DS_Store
 # Generated opam files are normally ignored.  The root package definition is
 # deliberately versioned for the non-Nix source-install path.
@@ -8,6 +17,12 @@ _build/
 zed/target/
 zed/extension.wasm
 zed/grammars/
+vscode/out/
+vscode/out-test/
+vscode/.vscode-test/
 test/fixtures/.amlc-lsp-*.aml
 .direnv/
 result
+# OPAM-managed extra sources; never vendor downloaded compiler archives.
+amlc-source.tar.gz
+lite-node-source.tar.gz

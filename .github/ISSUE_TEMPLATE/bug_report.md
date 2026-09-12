@@ -10,7 +10,7 @@ Describe the unexpected behaviour.
 
 ## Reproduction
 
-Provide a minimal AML source or project and the editor action that triggers it.
+Provide a minimal AppliedML source or project and the editor action that triggers it.
 
 ## Expected behaviour
 
@@ -20,8 +20,7 @@ Provide a minimal AML source or project and the editor action that triggers it.
 
 - amlc-lsp version or commit:
 - Editor and version (Neovim or Zed):
-- amlc version and source:
-- rehovot-check version, if the report concerns AppliedML:
+- `dialect` setting (`auto`, `legacy`, or `appliedml`):
 - Installation method (OPAM, Nix, or source):
 - Operating system:
 

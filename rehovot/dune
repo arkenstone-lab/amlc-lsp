@@ -7,11 +7,25 @@
   c_limit
   c_text
   c_eff
+  c_type
+  c_term
+  c_syn
+  c_orbit
+  c_check
+  c_low
+  c_fin
+  c_fun
+  form_runtime_limits
+  oct_form_check
   program_limits
   oct_lang
   oct_lex
   oct_scope
   oct_parse
+  oct_types
+  oct_check
   aml_verify
+  source_graph
+  editor_queries
   rehovot_check)
- (libraries zarith yojson))
+ (libraries unix zarith yojson))

@@ -1,0 +1,18 @@
+#!/usr/bin/env sh
+set -eu
+
+# Run from the LSP checkout. Sources are supplied by the package manager or
+# standalone installer; preparing and building the helper never fetches code.
+source_root=$1
+output_dir=$2
+mkdir -p "$output_dir"
+cp rehovot/dune rehovot/dune-project rehovot/rehovot_check.ml \
+  rehovot/editor_queries.ml rehovot/editor_queries.mli \
+  rehovot/source_graph.ml rehovot/source_graph.mli "$output_dir/"
+for module in oct_lang oct_lex oct_scope oct_parse oct_types oct_check aml_verify; do
+  cp "$source_root/lib/vm/compiler/$module.ml" "$output_dir/"
+done
+cp "$source_root/lib/vm/runtime/program_limits.ml" "$output_dir/"
+sh scripts/prepare-form-check "$source_root" "$output_dir"
+chmod u+w "$output_dir/oct_check.ml"
+patch --batch -d "$output_dir" -p1 < patches/rehovot-form-types.patch

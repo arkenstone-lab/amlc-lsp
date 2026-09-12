@@ -1,1 +1,5 @@
 (data_only_dirs rehovot zed)
+
+(install
+ (section doc)
+ (files THIRD_PARTY_NOTICES.md))
