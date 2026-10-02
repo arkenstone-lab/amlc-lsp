@@ -8,6 +8,7 @@ import * as yauzl from "yauzl";
 
 export const downloadedServerVersion = "0.4.0";
 const repository = "arkenstone-lab/amlc-lsp";
+const releaseMetadataUrl = `https://api.github.com/repos/${repository}/releases/tags/v${downloadedServerVersion}`;
 const archiveLimit = 50 * 1024 * 1024;
 const extractedLimit = 150 * 1024 * 1024;
 const fileLimit = 2000;
@@ -67,6 +68,25 @@ export function validateDownloadUrl(value: string): URL {
   return url;
 }
 
+export function githubRequestHeaders(
+  url: URL,
+  token: string | undefined = process.env.AMLC_LSP_GITHUB_TOKEN,
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    "User-Agent": "AppliedML-VSCode",
+    Accept:
+      url.hostname === "api.github.com"
+        ? "application/vnd.github+json"
+        : "application/octet-stream",
+  };
+  // Optional credentials are scoped to this release's metadata endpoint, never
+  // to archive downloads, another repository, or redirected asset hosts.
+  if (token && url.href === releaseMetadataUrl) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  return headers;
+}
+
 async function download(value: string, limit: number): Promise<Buffer> {
   let url = validateDownloadUrl(value);
   const signal = AbortSignal.timeout(120_000);
@@ -74,13 +94,7 @@ async function download(value: string, limit: number): Promise<Buffer> {
     const response = await fetch(url, {
       redirect: "manual",
       signal,
-      headers: {
-        "User-Agent": "AppliedML-VSCode",
-        Accept:
-          url.hostname === "api.github.com"
-            ? "application/vnd.github+json"
-            : "application/octet-stream",
-      },
+      headers: githubRequestHeaders(url),
     });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get("location");
@@ -93,7 +107,17 @@ async function download(value: string, limit: number): Promise<Buffer> {
     }
     if (!response.ok || !response.body) {
       await response.body?.cancel();
-      throw new Error(`GitHub download failed (HTTP ${response.status}).`);
+      if (
+        response.headers.get("x-ratelimit-remaining") === "0" ||
+        response.status === 429
+      ) {
+        throw new Error(
+          "GitHub API rate limit reached. Try again later or configure a local server.",
+        );
+      }
+      throw new Error(
+        `GitHub download failed on ${url.hostname} (HTTP ${response.status}).`,
+      );
     }
     if (Number(response.headers.get("content-length")) > limit) {
       await response.body.cancel();
@@ -316,12 +340,9 @@ async function install(
       `Downloading ${spec.name} from GitHub release v${downloadedServerVersion}.`,
     );
     const metadata = JSON.parse(
-      (
-        await deps.download(
-          `https://api.github.com/repos/${repository}/releases/tags/v${downloadedServerVersion}`,
-          2 * 1024 * 1024,
-        )
-      ).toString("utf8"),
+      (await deps.download(releaseMetadataUrl, 2 * 1024 * 1024)).toString(
+        "utf8",
+      ),
     );
     if (
       metadata.tag_name !== `v${downloadedServerVersion}` ||

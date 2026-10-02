@@ -105,3 +105,11 @@ and checks cache reuse on restart. The separate downloaded-server CI job runs
 this test on all five supported host targets and preserves Extension Host logs.
 It requires public release assets and GitHub connectivity; the regular
 extension tests continue to use a local fixture server.
+
+GitHub's anonymous API rate limit is shared by clients on the same public IP.
+CI uses its read-only workflow token for release metadata. On restricted shared
+networks, optionally set `AMLC_LSP_GITHUB_TOKEN` in the extension host's environment
+before launching VS Code. It is used only for this repository's pinned release
+metadata request, never for archive downloads or asset redirects, and is not
+passed to the language server. No token is
+needed for normal setup, and the extension does not request GitHub sign-in.

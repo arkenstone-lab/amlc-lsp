@@ -9,6 +9,8 @@
 - Validate SHA-256, archive paths and extraction sizes before running a download.
 - Ignore stale installer paths and preserve explicit server configuration.
 - Test downloaded servers in VS Code on all five supported host targets.
+- Allow a scoped environment token for release metadata on shared networks;
+  report API rate limits without forwarding credentials to assets or the server.
 
 ## 0.4.0
 

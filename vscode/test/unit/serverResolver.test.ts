@@ -57,6 +57,16 @@ test("Windows environment overrides collapse case-insensitive keys", () => {
   );
 });
 
+test("download credentials are not passed to the language server", () => {
+  for (const platform of ["win32", "darwin", "linux"]) {
+    assert.equal(
+      serverEnvironment({ AMLC_LSP_GITHUB_TOKEN: "test-token" }, {}, platform)
+        .AMLC_LSP_GITHUB_TOKEN,
+      undefined,
+    );
+  }
+});
+
 function fixture(path?: string, opam?: string) {
   const calls: string[] = [];
   const deps: ResolutionDependencies = {

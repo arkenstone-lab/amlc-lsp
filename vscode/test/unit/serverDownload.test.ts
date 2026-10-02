@@ -9,6 +9,7 @@ import {
   archivePath,
   downloadServer,
   extractArchive,
+  githubRequestHeaders,
   serverAsset,
   validateDownloadUrl,
   type DownloadDependencies,
@@ -46,6 +47,29 @@ test("restricts URLs to GitHub HTTPS hosts, including redirects", () => {
     "file:///tmp/a",
   ]) {
     assert.throws(() => validateDownloadUrl(url));
+  }
+});
+
+test("optional credentials are restricted to the pinned release metadata", () => {
+  const metadata = new URL(
+    "https://api.github.com/repos/arkenstone-lab/amlc-lsp/releases/tags/v0.4.0",
+  );
+  assert.equal(
+    githubRequestHeaders(metadata, "test-token").Authorization,
+    "Bearer test-token",
+  );
+  assert.equal(githubRequestHeaders(metadata, "").Authorization, undefined);
+  for (const value of [
+    "https://github.com/arkenstone-lab/amlc-lsp/releases/download/v0.4.0/server.tar.gz",
+    "https://release-assets.githubusercontent.com/archive",
+    "https://objects.githubusercontent.com/archive",
+    "https://api.github.com/repos/other/repository/releases/tags/v0.4.0",
+    "https://api.github.com/repos/arkenstone-lab/amlc-lsp/releases/tags/v0.4.0?redirected=1",
+  ]) {
+    assert.equal(
+      githubRequestHeaders(new URL(value), "test-token").Authorization,
+      undefined,
+    );
   }
 });
 

@@ -7,7 +7,9 @@ export function serverEnvironment(
   platform: string = process.platform,
 ): NodeJS.ProcessEnv {
   if (platform !== "win32") {
-    return { ...base, ...overrides };
+    const result = { ...base, ...overrides };
+    delete result.AMLC_LSP_GITHUB_TOKEN;
+    return result;
   }
   // Windows keys are case-insensitive. Avoid passing both Path and PATH to
   // Node's process launcher, which would otherwise discard one of them.
@@ -18,6 +20,7 @@ export function serverEnvironment(
   ]) {
     result[key.toUpperCase()] = value;
   }
+  delete result.AMLC_LSP_GITHUB_TOKEN;
   return result;
 }
 

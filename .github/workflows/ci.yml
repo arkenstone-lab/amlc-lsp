@@ -59,6 +59,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       AMLC_PREBUILT_TEST: '1'
+      AMLC_LSP_GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
