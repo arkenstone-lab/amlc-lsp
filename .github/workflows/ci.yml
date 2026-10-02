@@ -38,13 +38,15 @@ jobs:
       - name: Package VSIX
         if: ${{ runner.os == 'Linux' }}
         working-directory: vscode
-        run: npx --yes @vscode/vsce@3.9.2 package --no-dependencies --out appliedml.vsix
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          npx --yes @vscode/vsce@3.9.2 package --no-dependencies --out "appliedml-lsp-$version.vsix"
       - name: Preserve VSIX for inspection
         if: ${{ runner.os == 'Linux' }}
         uses: actions/upload-artifact@v4
         with:
           name: appliedml-vsix
-          path: vscode/appliedml.vsix
+          path: vscode/appliedml-lsp-*.vsix
           if-no-files-found: error
 
   zed-extension:
@@ -65,7 +67,7 @@ jobs:
     if: ${{ github.event_name == 'pull_request' }}
     uses: ./.github/workflows/zed-server-assets.yml
     with:
-      release_tag: v0.3.0
+      release_tag: v0.4.0
       source_commit: ${{ github.sha }}
     permissions:
       contents: read

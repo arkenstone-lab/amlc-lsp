@@ -3,9 +3,9 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 const requiredAmlcVersion = "0.1.0~preview";
-const serverPackage = "amlc-lsp.0.3.0";
+const serverPackage = "amlc-lsp.0.4.0";
 const serverSource =
-  "git+https://github.com/arkenstone-lab/amlc-lsp.git#34d5c62c5e45687a0b0bd384d79657621b2deb12";
+  "git+https://github.com/arkenstone-lab/amlc-lsp.git#v0.4.0";
 
 export interface CommandResult {
   code: number | null;
@@ -151,7 +151,7 @@ export async function checkAmlcCompatibility(
   }
   if (installedVersion !== requiredAmlcVersion) {
     throw new OpamInstallError(
-      `The active OPAM switch contains amlc ${installedVersion}; amlc-lsp 0.3.0 requires ${requiredAmlcVersion}.`,
+      `The active OPAM switch contains amlc ${installedVersion}; amlc-lsp 0.4.0 requires ${requiredAmlcVersion}.`,
       "amlc-incompatible",
     );
   }

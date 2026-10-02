@@ -42,8 +42,8 @@ nix_lite_node_rev=$(awk '
 ' flake.nix)
 vscode_installer_package=$(sed -n 's/^const serverPackage = "\([^"]*\)";$/\1/p' vscode/src/opamInstaller.ts)
 nvim_installer_package=$(sed -n 's/^local server_package = "\([^"]*\)"$/\1/p' nvim/lua/amlc_lsp/opam.lua)
-vscode_installer_rev=$(sed -n 's@.*amlc-lsp.git#\([0-9a-f][0-9a-f]*\).*@\1@p' vscode/src/opamInstaller.ts)
-nvim_installer_rev=$(sed -n 's@.*amlc-lsp.git#\([0-9a-f][0-9a-f]*\).*@\1@p' nvim/lua/amlc_lsp/opam.lua)
+vscode_installer_ref=$(sed -n 's@.*amlc-lsp.git#\([^"]*\)".*@\1@p' vscode/src/opamInstaller.ts)
+nvim_installer_ref=$(sed -n 's@.*amlc-lsp.git#\([^"]*\)".*@\1@p' nvim/lua/amlc_lsp/opam.lua)
 opam_amlc_version=$(sed -n 's/.*"amlc" {= "\([^"]*\)"}.*/\1/p' amlc-lsp.opam)
 vscode_installer_amlc=$(sed -n 's/^const requiredAmlcVersion = "\([^"]*\)";$/\1/p' vscode/src/opamInstaller.ts)
 nvim_installer_amlc=$(sed -n 's/^local required_amlc_version = "\([^"]*\)"$/\1/p' nvim/lua/amlc_lsp/opam.lua)
@@ -82,11 +82,12 @@ for candidate in "$vscode_installer_package" "$nvim_installer_package"; do
     exit 1
   }
 done
-test -n "$vscode_installer_rev"
-test "$vscode_installer_rev" = "$nvim_installer_rev" || {
-  printf 'editor installer source mismatch: VS Code uses %s, Neovim uses %s\n' "$vscode_installer_rev" "$nvim_installer_rev" >&2
-  exit 1
-}
+for candidate in "$vscode_installer_ref" "$nvim_installer_ref"; do
+  test "$candidate" = "v$root_version" || {
+    printf 'editor installer source mismatch: expected v%s, found %s\n' "$root_version" "$candidate" >&2
+    exit 1
+  }
+done
 for candidate in "$vscode_installer_amlc" "$nvim_installer_amlc"; do
   test "$candidate" = "$opam_amlc_version" || {
     printf 'editor installer AMLC mismatch: expected %s, found %s\n' "$opam_amlc_version" "$candidate" >&2

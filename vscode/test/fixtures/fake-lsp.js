@@ -3,7 +3,7 @@
 const requestedVersion = process.argv
   .find((argument) => argument.startsWith("--server-version="))
   ?.slice("--server-version=".length);
-const serverVersion = requestedVersion || "0.3.0";
+const serverVersion = requestedVersion || "0.4.0";
 let input = Buffer.alloc(0);
 
 function write(message) {
