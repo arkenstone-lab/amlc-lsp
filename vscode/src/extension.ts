@@ -11,6 +11,8 @@ import {
   OpamContext,
   OpamInstallError,
 } from "./opamInstaller";
+import { downloadServer, downloadedServerVersion } from "./serverDownload";
+import { executableExists, findServerOnPath, resolveServer, serverEnvironment } from "./serverResolver";
 
 interface LaunchConfiguration {
   command: string;
@@ -82,13 +84,14 @@ function serverOptions(launch: LaunchConfiguration): ServerOptions {
     command: launch.command,
     args: launch.args,
     options: {
-      env: { ...process.env, ...launch.environment },
+      env: serverEnvironment(process.env, launch.environment),
     },
   };
 }
 
 function clientOptions(): LanguageClientOptions {
-  const configuration = vscode.workspace.getConfiguration("amlcLsp");
+  const configuration = vscode.workspace.getConfiguration("amlcLsp",
+    vscode.window.activeTextEditor?.document.uri);
   return {
     documentSelector: [
       { scheme: "file", language: "appliedml" },
@@ -163,8 +166,29 @@ function warnIfIncompatible(): void {
     });
 }
 
-async function startClient(): Promise<void> {
+async function startClient(context: vscode.ExtensionContext): Promise<void> {
   const launch = launchConfiguration();
+  const configuration = vscode.workspace.getConfiguration("amlcLsp");
+  launch.command = await resolveServer({
+    configured: configuration.get<string>("server.path", "").trim(),
+    remembered: managedServerPath,
+    autoDownload: configuration.get<boolean>("server.autoDownload", true),
+  }, {
+    findPath: () => findServerOnPath(serverEnvironment(process.env, launch.environment)),
+    findOpam: () => findInstalledServerWithOpam(opamContext()),
+    exists: executableExists,
+    download: async () => {
+      if (!vscode.workspace.isTrusted) {
+        throw new Error("Trust the workspace before downloading and running amlc-lsp.");
+      }
+      return vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: `Preparing amlc-lsp ${downloadedServerVersion}`,
+        cancellable: false,
+      }, () => downloadServer(context.globalStorageUri.fsPath,
+        message => outputChannel?.appendLine(message)));
+    },
+  });
   outputChannel?.appendLine(`Starting amlc-lsp: ${launch.command}`);
   const nextClient = new LanguageClient(
     "amlcLsp",
@@ -172,7 +196,12 @@ async function startClient(): Promise<void> {
     serverOptions(launch),
     clientOptions(),
   );
-  await nextClient.start();
+  try { await nextClient.start(); }
+  catch (error) {
+    await nextClient.stop().catch(() => undefined);
+    nextClient.dispose();
+    throw error;
+  }
   client = nextClient;
   activeLaunch = launch;
   activeServerName = nextClient.initializeResult?.serverInfo?.name;
@@ -184,52 +213,21 @@ async function startClient(): Promise<void> {
   warnIfIncompatible();
 }
 
-async function findServerAfterLaunchFailure(
-  context: vscode.ExtensionContext,
-): Promise<boolean> {
-  const configuredPath = vscode.workspace
-    .getConfiguration("amlcLsp")
-    .get<string>("server.path", "")
-    .trim();
-  if (configuredPath || managedServerPath) {
-    return false;
-  }
-  const executable = await findInstalledServerWithOpam(opamContext());
-  if (!executable) {
-    return false;
-  }
-  outputChannel?.appendLine(
-    `Found amlc-lsp in the active OPAM switch: ${executable}`,
-  );
-  await rememberServer(context, executable);
-  await startClient();
-  return true;
-}
-
 async function startClientWithMessage(
   context: vscode.ExtensionContext,
 ): Promise<void> {
   try {
-    await startClient();
+    await startClient(context);
   } catch (error) {
     client = undefined;
     activeLaunch = undefined;
     activeServerName = undefined;
     activeServerVersion = undefined;
     outputChannel?.appendLine(`Failed to start amlc-lsp: ${String(error)}`);
-    try {
-      if (await findServerAfterLaunchFailure(context)) {
-        return;
-      }
-    } catch (recoveryError) {
-      outputChannel?.appendLine(
-        `Failed to use the OPAM language server: ${String(recoveryError)}`,
-      );
-    }
     void vscode.window
       .showErrorMessage(
-        "AppliedML could not start amlc-lsp. Install the server or configure " +
-          "amlcLsp.server.path. See the AppliedML output channel for details.",
+        `AppliedML could not start amlc-lsp: ${String(error)}. ` +
+          "Configure a local server or install with OPAM. See the AppliedML output channel for details.",
         "Install with OPAM",
         "Open Settings",
         "Installation Guide",
@@ -395,6 +393,7 @@ export async function activate(
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (
         event.affectsConfiguration("amlcLsp.server.path") ||
+        event.affectsConfiguration("amlcLsp.server.autoDownload") ||
         event.affectsConfiguration("amlcLsp.server.arguments") ||
         event.affectsConfiguration("amlcLsp.server.environment") ||
         event.affectsConfiguration("amlcLsp.opam.path")
@@ -407,7 +406,7 @@ export async function activate(
       }
     }),
   );
-  await startClientWithMessage(context);
+  await queueRestart(context);
   return { getServerStatus: currentStatus };
 }
 

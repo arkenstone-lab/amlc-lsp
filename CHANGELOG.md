@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- VS Code can download the versioned prebuilt server when no local server is
+  available, with checksum verification and an opt-out setting.
+
 ## 0.4.0
 
 ### Added

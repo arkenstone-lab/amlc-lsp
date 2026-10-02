@@ -93,7 +93,13 @@
           "type": "string",
           "default": "",
           "scope": "machine-overridable",
-          "description": "Absolute path to amlc-lsp. When empty, the extension resolves amlc-lsp from PATH."
+          "description": "Absolute path to amlc-lsp. When empty, use PATH or OPAM, then download the matching server release if enabled."
+        },
+        "amlcLsp.server.autoDownload": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "description": "Download the matching prebuilt server from the official GitHub release when no local server is available. Does not modify AMLC or OPAM."
         },
         "amlcLsp.server.arguments": {
           "type": "array",
@@ -149,16 +155,21 @@
     "compile": "npm run check && esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=out/extension.js",
     "package": "npm run check && esbuild src/extension.ts --bundle --minify --platform=node --format=cjs --external:vscode --outfile=out/extension.js",
     "compile-tests": "tsc -p test/tsconfig.json",
-    "test:installer": "tsc -p test/unit/tsconfig.json && esbuild test/unit/opamInstaller.test.ts --bundle --platform=node --format=cjs --outfile=out-test/opamInstaller.test.js && node --test out-test/opamInstaller.test.js",
+    "test:installer": "tsc -p test/unit/tsconfig.json && esbuild test/unit/opamInstaller.test.ts test/unit/serverDownload.test.ts test/unit/serverResolver.test.ts --bundle --platform=node --format=cjs --outdir=out-test/unit && node --test out-test/unit/opamInstaller.test.js out-test/unit/serverDownload.test.js out-test/unit/serverResolver.test.js",
     "check": "tsc --noEmit -p .",
     "test": "npm run compile && npm run test:installer && npm run compile-tests && node out-test/runTest.js"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.100.0",
+    "@types/yauzl": "3.4.0",
     "@vscode/test-electron": "^3.1.0",
     "esbuild": "^0.28.2",
-    "vscode-languageclient": "^9.0.1",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "vscode-languageclient": "^9.0.1"
+  },
+  "dependencies": {
+    "tar": "7.5.22",
+    "yauzl": "3.4.0"
   }
 }

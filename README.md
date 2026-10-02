@@ -136,10 +136,21 @@ and run **Extensions: Install from VSIX**. The Visual Studio Code client is
 versioned independently at the patch level and does not bundle the server or
 compiler.
 
-The extension uses `amlc-lsp` from PATH by default. If that fails, it checks the
-active OPAM switch for an existing server. When the switch already contains
-`amlc.0.1.0~preview` but not `amlc-lsp`, choose **Install with OPAM** in the
-notification or run **AppliedML: Install Language Server with OPAM**. After
+Automatic server downloads are currently unreleased; the published 0.4.0
+extension uses the PATH/OPAM setup only.
+
+The development extension prefers an explicitly configured server, then one
+on PATH or in the active OPAM switch. If none is available, it downloads the
+matching 0.4.0 server archive from GitHub Releases into VS Code's extension
+storage. It verifies the release asset's SHA-256 before extracting and running
+it, preserving the bundled libraries, corresponding GMP source and license
+notices. No OCaml, OPAM or separate AMLC installation is needed for this path.
+macOS (Apple Silicon and Intel), Linux (ARM64 and x86_64), and x86_64 Windows
+are supported. Remote workspaces download for the extension host's platform.
+Set `amlcLsp.server.autoDownload` to `false` for a manual-only setup.
+
+Alternatively, when an OPAM switch already contains `amlc.0.1.0~preview`, run
+**AppliedML: Install Language Server with OPAM**. After
 confirmation, the extension installs only `amlc-lsp.0.4.0` from the versioned
 `v0.4.0` release tag. It does not install, replace, or repin AMLC. It then records
 the server's absolute path and reconnects automatically. Use the manual source
@@ -353,8 +364,8 @@ Before publishing 0.4.0:
    Distribute editor updates only after their server tag and assets are public.
 6. Verify installation through each editor's published distribution. Neovim
    users update this repository runtime and use the source installation guide
-   to upgrade an existing server. Prepare VS Code prebuilt-server downloads in
-   a separate PR.
+   to upgrade an existing server. Publish VS Code's prebuilt-server downloader
+   separately from this server release after its own client validation.
 
 ## License
 
