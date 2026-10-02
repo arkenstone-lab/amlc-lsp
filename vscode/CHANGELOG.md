@@ -1,6 +1,6 @@
 # Change Log
 
-## 0.4.0 (unreleased)
+## 0.4.0
 
 - Target the amlc-lsp 0.4 release line and install the server from the `v0.4.0`
   source tag when the required AMLC package is already installed.

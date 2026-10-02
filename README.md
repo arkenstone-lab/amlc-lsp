@@ -1,10 +1,5 @@
 # amlc-lsp
 
-Version 0.4.0 is being prepared for release. The versioned installation commands
-and downloads below require the published `v0.4.0` tag and release assets.
-The latest published release is
-[v0.3.0](https://github.com/arkenstone-lab/amlc-lsp/releases/tag/v0.3.0).
-
 Compiler-backed diagnostics, completion, and code navigation for Applied Meta
 Language (AppliedML) in Visual Studio Code, Zed, and Neovim. Analysis runs
 locally; no RPC node is required.
@@ -343,9 +338,8 @@ instructions and the status of Zed distribution where relevant.
 
 Before publishing 0.4.0:
 
-1. Finish the release PR and require all platform checks to pass. Remove the
-   preparation notices in this README and the VS Code README, and remove
-   `(unreleased)` from both changelogs in the final release commit.
+1. Finish the release PR and require all platform checks to pass on the final
+   commit, including the release documentation changes.
 2. Merge the release preparation and create `v0.4.0` at the merged commit. Never
    move a published version tag: the editor source installers use that tag.
 3. Create a draft GitHub release using that format. Run **Publish

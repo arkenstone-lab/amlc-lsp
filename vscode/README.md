@@ -1,8 +1,5 @@
 # AppliedML LSP for Visual Studio Code
 
-Version 0.4.0 is being prepared. Its installation target requires the published
-`v0.4.0` server tag before this extension is distributed.
-
 Language support for Applied Meta Language (AppliedML), powered by `amlc-lsp`.
 The extension recognizes `.aml` files, provides basic TextMate highlighting,
 and exposes the diagnostics and language features advertised by the server.
