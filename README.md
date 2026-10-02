@@ -334,9 +334,12 @@ workflow, and [CHANGELOG.md](CHANGELOG.md) for user-visible changes.
 
 ## Release preparation
 
-The draft GitHub release body is [release-notes/0.4.0.md](release-notes/0.4.0.md).
-The release title is `amlc-lsp 0.4.0`; keep the body as Markdown paragraphs and
-sections rather than putting it in the title.
+Keep release history in [CHANGELOG.md](CHANGELOG.md) and GitHub Releases, without
+a separate release-notes file. Use `v0.4.0` as the GitHub release title, matching
+the previous releases. Write the Markdown body when preparing the GitHub release,
+following the 0.3.0 structure: a short introduction, Highlights, Install the
+server, Visual Studio Code, and Current limits. Include the compiler-pin upgrade
+instructions and the status of Zed distribution where relevant.
 
 Before publishing 0.4.0:
 
@@ -345,7 +348,7 @@ Before publishing 0.4.0:
    `(unreleased)` from both changelogs in the final release commit.
 2. Merge the release preparation and create `v0.4.0` at the merged commit. Never
    move a published version tag: the editor source installers use that tag.
-3. Create a draft GitHub release with the title and body above. Run **Publish
+3. Create a draft GitHub release using that format. Run **Publish
    Zed server assets** with `release_tag: v0.4.0` to build and attach the five
    tagged server archives.
 4. Attach `appliedml-lsp-0.4.0.vsix` from the `appliedml-vsix` artifact of a
