@@ -1,11 +1,12 @@
 # Legacy compatibility patches
 
 The default OPAM and Nix packages use the unmodified `amlc.vm` library from
-AMLC commit `db1080cae60e4ffbbfa31b3f94dfbd0a974573e9`. They do not apply either
+AMLC commit `1f24fa97ed41a421eec84d52dceff31b0ea5ffbd`. They do not apply either
 patch in this directory.
 
 The explicitly selected Nix `legacy` environment applies
-`amlc-editor-interface.patch` to that AMLC revision. It adds the old subprocess
+`amlc-editor-interface.patch` to AMLC commit
+`db1080cae60e4ffbbfa31b3f94dfbd0a974573e9`. It adds the old subprocess
 JSON/editor contract used only as a regression baseline.
 `rehovot-form-types.patch` applies separately to Lite Node compiler components
 when building the opt-in `rehovot-check` regression helper. See

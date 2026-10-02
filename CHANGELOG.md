@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.4.0 (unreleased)
+
+### Added
+
+- Same-file navigation, references and rename for checked nested struct fields
+  in storage paths, term form parameters and direct form calls.
+- Named-type references in checked `equal[Type]` expressions.
+
+### Fixed
+
+- Compiler error headers now provide diagnostic positions when their coordinates
+  belong to the current document and fall on valid UTF-8 boundaries. Imported-file
+  errors retain their original messages without using foreign coordinates in the
+  current document.
+- Unlocated diagnostic messages now distinguish missing current-document
+  locations from locations supplied for imported files.
+- The standalone Rehovot regression helper uses the same Lite Node revision as
+  the Nix package; metadata checks catch mismatched revisions.
+
+### Compatibility
+
+- Update the official AMLC dependency to `1f24fa97` and use its explicit Source
+  compilation mode. Update the Lite Node regression baseline to `f58b465`.
+- Keep the patched legacy AMLC regression baseline at `db1080ca`.
+
 ## 0.3.0
 
 ### Added

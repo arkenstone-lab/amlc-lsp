@@ -1,7 +1,7 @@
 (library
  (name amlc_analysis)
  (optional)
- (modules amlc_analysis recovery members expression_uses call_contexts format_layout enum_symbols type_uses state_symbols workspace_index)
+ (modules amlc_analysis compiler_location recovery members expression_uses call_contexts format_layout enum_symbols type_uses state_symbols struct_fields term_symbols workspace_index)
  (libraries amlc.vm yojson unix))
 
 (executable

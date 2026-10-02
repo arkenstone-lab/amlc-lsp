@@ -41,7 +41,7 @@ build links GMP from its build environment. A standalone editor download must
 separately verify native library availability on a clean target system; do not
 ship this development binary as a self-contained editor release asset.
 
-The currently audited upstream package (`0.1.0~preview`, commit `db1080ca`)
+The currently audited upstream package (`0.1.0~preview`, commit `1f24fa97`)
 requires OCaml 4.14.2 in its OPAM definition. It is not currently registered
 in the public OPAM repository; install its official source into an isolated
 switch before running these tests. Alternatively, the default Nix shell now
@@ -49,7 +49,10 @@ provides unmodified AMLC; its `legacy` shell supplies the patched test baseline.
 
 The adapter exposes parsed program/function/form metadata and lexer-verified
 declaration name ranges. It preserves compiler-provided locations as UTF-8 byte
-offsets; errors without reliable ranges remain unlocated. Its optional resolver
+offsets, including AMLC's anchored `line N column M:` and `line N:` error
+headers. Coordinates must be within the document and on UTF-8 boundaries.
+Imported-file headers are not mapped onto the current document; errors without
+reliable locations remain unlocated. Its optional resolver
 uses upstream's direct interface imports, not function imports or recursive
 module linking. Without a resolver, imported documents return `Needs_imports`.
 
@@ -92,8 +95,12 @@ expression-local bindings, with body-only completion and shadow restoration.
 Checked explicit `use` and permitted direct form calls also resolve to their
 same-file declaration, including calls inside forms and constructors. Original
 compiler checks determine whether direct calls are permitted; same-named variables
-and comments are not form references. The separate term syntax remains unindexed
-for parameters/calls, and the overall reference index is still incomplete.
+and comments are not form references. Checked term documents index colon-bound
+form parameters and direct `name(` calls from the official term lexer. A body
+whose variables disagree with that lexer keeps the parameter selection and
+publishes no uses; a failed check publishes neither. The reference index is
+still incomplete for local struct values and for workspace names other than
+interface imports and `implements`.
 Pure-function calls inside forms use the term checker's resolution. Where form
 linking promotes a pure function ahead of a same-named builtin, ordinary-call
 navigation also uses the official linked call set; removing the form invalidates
@@ -216,20 +223,26 @@ declarations, including nested named types. The official type parser determines
 their boundaries; following refinements and same-named variables/functions do not
 become type references. AST-matched state, struct, event, constant and interface
 declarations use the same type parser. Event modifiers and form effect labels
-are not type references. Expression type sites and cross-file completeness still
-need review; this remains a partial reference index.
+are not type references. Checked `equal[Type]` expressions use that same parser
+for their named types; comments stay outside the type. Cross-file references
+outside interface imports and `implements` remain unindexed.
 
 Struct declarations use the same checked type-reference index for navigation and
 hover, including nested struct/state types and interface signatures. They appear
-as structs in completion and outlines, not functions. This does not add nested
-struct-field reference tracking or local struct-value member semantics.
+as structs in completion and outlines, not functions. A storage path indexes
+a nested struct field only when resolution reaches that field and the lexer
+matches the path order; otherwise the field has no uses. A trailing list or
+map `length` is not a field use, and the struct fields before it stay indexed.
+A field named `length` stays an ordinary segment. Local struct-value
+member access stays unindexed.
 
 Root state declarations and checked `self.field` occurrences support navigation,
 typed hover and property semantic tokens. Reads, assignments and indexed receivers
 resolve to the state declaration, independently of same-named local bindings.
 State fields appear in outlines but not unqualified completion. Comments, strings,
-nested struct-field suffixes and form effect targets are not state references;
-failed checking clears use mappings.
+nested struct-field suffixes and form effect targets are not state references.
+A resolved nested suffix is a reference to the struct field instead.
+Failed checking clears use mappings.
 
 Ordinary
 `name.member` is parsed by upstream as an enum access, not local struct-variable

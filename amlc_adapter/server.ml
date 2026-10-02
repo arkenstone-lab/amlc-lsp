@@ -94,7 +94,7 @@ let analyze uri text =
   let diagnostics = List.map (fun (item : Amlc_analysis.diagnostic) ->
     let first, last, message = match item.span with
       | Some span -> span.first, span.last, item.message
-      | None -> 0, 0, "[AMLC did not supply a source location] " ^ item.message in
+      | None -> 0, 0, "[No reliable source location in the current document] " ^ item.message in
     { Amlc_lsp.message; code = quick_fix_code ~syntax text item; severity = 1;
       start_position = Amlc_lsp.utf16_position text first;
       end_position = Amlc_lsp.utf16_position text last }) analysis.diagnostics in

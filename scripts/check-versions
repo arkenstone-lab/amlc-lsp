@@ -31,6 +31,15 @@ nix_amlc_rev=$(awk '
     exit
   }
 ' flake.nix)
+rehovot_installer_rev=$(sed -n 's/^revision=\([0-9a-f][0-9a-f]*\)$/\1/p' scripts/build-rehovot-check)
+nix_lite_node_rev=$(awk '
+  /liteNodeSrc =/ { in_lite_node = 1 }
+  in_lite_node && /^[[:space:]]*rev = / {
+    match($0, /"[^"]+"/)
+    print substr($0, RSTART + 1, RLENGTH - 2)
+    exit
+  }
+' flake.nix)
 vscode_installer_package=$(sed -n 's/^const serverPackage = "\([^"]*\)";$/\1/p' vscode/src/opamInstaller.ts)
 nvim_installer_package=$(sed -n 's/^local server_package = "\([^"]*\)"$/\1/p' nvim/lua/amlc_lsp/opam.lua)
 vscode_installer_rev=$(sed -n 's@.*amlc-lsp.git#\([0-9a-f][0-9a-f]*\).*@\1@p' vscode/src/opamInstaller.ts)
@@ -57,6 +66,12 @@ test "$vscode_release_line" = "$root_release_line" || {
 test -n "$opam_amlc_rev"
 test "$opam_amlc_rev" = "$nix_amlc_rev" || {
   printf 'AMLC revision mismatch: OPAM pins %s, Nix pins %s\n' "$opam_amlc_rev" "$nix_amlc_rev" >&2
+  exit 1
+}
+
+test -n "$rehovot_installer_rev"
+test "$rehovot_installer_rev" = "$nix_lite_node_rev" || {
+  printf 'Lite Node revision mismatch: helper pins %s, Nix pins %s\n' "$rehovot_installer_rev" "$nix_lite_node_rev" >&2
   exit 1
 }
 

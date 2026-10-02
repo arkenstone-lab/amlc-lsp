@@ -2,6 +2,13 @@ open Amlc_analysis
 
 let require condition message = if not condition then failwith message
 
+let index_of source needle =
+  let width = String.length needle in
+  let rec find index =
+    if index + width > String.length source then failwith ("missing " ^ needle) else
+    if String.sub source index width = needle then index else find (index + 1) in
+  find 0
+
 let check_ranges source analysis =
   List.iter (fun declaration -> List.iter (fun { first; last } ->
     require (String.sub source first (last - first) = declaration.name)
@@ -12,6 +19,33 @@ let check_ranges source analysis =
     | None -> failwith ("missing declaration range: " ^ declaration.name)) analysis.declarations
 
 let () =
+  let location = Amlc_analysis__Compiler_location.offset in
+  let location_source = "// 한글😀\r\n  return true\r\n" in
+  let second_line = String.index location_source '\n' + 1 in
+  require (location ~source:location_source "line 2 column 3: type mismatch"
+    = Some (second_line + 2)) "compiler message byte location";
+  require (location ~source:location_source "line 2: type mismatch"
+    = Some second_line) "compiler line-only location";
+  require (location ~source:location_source "line 1 column 14: type mismatch"
+    = Some 13) "UTF-8 location following an emoji";
+  require (location ~origin:"[current document]_" ~source:location_source
+    "source = [current document]_ line 2 column 3: type mismatch"
+    = Some (second_line + 2)) "exact main source header";
+  List.iter (fun message -> require (location ~source:location_source message = None)
+    ("reject compiler location: " ^ message))
+    ["line 0 column 1: error"; "line 2 column 0: error";
+     "line 9 column 1: error"; "line 2 column 999: error";
+     "line 999999999999999999999999 column 1: error";
+     "line 1 column 5: error"; "line -1 column 1: error";
+     "line 2 column 3 error"; "error mentions line 2 column 3: error";
+     "source = dependency.aml line 2 column 3: error"; "error without location"];
+  List.iter (fun message -> require
+    (location ~origin:"[current document]_" ~source:location_source message = None)
+    "do not map foreign source headers")
+    ["source = dependency.aml line 2 column 3: error";
+     "source = [current document] line 2 column 3: error";
+     "line 2 column 3: error"];
+
   let valid = analyze "program Demo { term unit }" in
   require (valid.status = Checked && valid.diagnostics = []) "valid term";
   require (List.exists (fun d -> d.name = "Demo") valid.declarations) "program name";
@@ -29,6 +63,54 @@ let () =
   check_ranges form_source forms;
   require (List.exists (fun d -> d.name = "identity" && d.parameters = ["value"])
     forms.declarations) "form metadata";
+  let identity = List.find (fun d -> d.kind = "form" && d.name = "identity") forms.declarations in
+  require (List.length identity.uses = 1) "direct term call";
+  let term_value = List.find (fun d -> d.kind = "parameter" && d.name = "value") forms.declarations in
+  require (term_value.return_type = Some "int" && term_value.visibility = []
+    && List.length term_value.uses = 1) "term parameter declaration and body use";
+  let term_shadow_source = "program P { form identity [] (many value: int) ->[many] int marks {} = let many value: int = value in value term identity(1) }" in
+  let term_shadow = analyze term_shadow_source in
+  require (term_shadow.diagnostics = []) "term parameter shadow fixture";
+  check_ranges term_shadow_source term_shadow;
+  let shadowed = List.find (fun d -> d.kind = "parameter" && d.name = "value") term_shadow.declarations in
+  require (List.length shadowed.uses = 1) "shadowed term parameter keeps the initializer use";
+  let shadowed_use = List.hd shadowed.uses in
+  require (shadowed_use.first > String.rindex term_shadow_source '='
+    && shadowed_use.first < index_of term_shadow_source " in ")
+    "the shadowed body use is not a parameter use";
+  let term_add_source = "program P { form add [many left: int] (many right: int) ->[many] int marks {} = /* left */ left + right term add(1, 2) }" in
+  let term_add = analyze term_add_source in
+  require (term_add.diagnostics = []) "two-parameter term fixture";
+  check_ranges term_add_source term_add;
+  List.iter (fun name ->
+    let parameter = List.find (fun d -> d.kind = "parameter" && d.name = name) term_add.declarations in
+    require (parameter.return_type = Some "int" && List.length parameter.uses = 1)
+      ("term parameter use: " ^ name)) ["left"; "right"];
+  require (not (List.exists (fun d -> List.exists (fun span -> span.first = index_of term_add_source "/* left */" + 3) d.uses)
+    term_add.declarations)) "a commented term name is not a parameter use";
+  let added = List.find (fun d -> d.kind = "form" && d.name = "add") term_add.declarations in
+  require (List.length added.uses = 1) "direct term call with two arguments";
+  let term_call_source =
+    "program P { form identity [] (many item: int) ->[many] int marks {} = item form relay [] (many value: int) ->[many] int marks {} = identity(value) + value term relay(1) }" in
+  let term_call = analyze term_call_source in
+  require (term_call.diagnostics = []) "a term form calls another form";
+  check_ranges term_call_source term_call;
+  let relay_value = List.find (fun d -> d.kind = "parameter" && d.name = "value")
+    term_call.declarations in
+  let call_value = index_of term_call_source "identity(value)" + String.length "identity(" in
+  let following_value = index_of term_call_source ") + value" + String.length ") + " in
+  require (List.map (fun span -> span.first) relay_value.uses = [call_value; following_value])
+    "inlined form calls retain the caller parameter's source uses";
+  List.iter (fun name ->
+    let form = List.find (fun d -> d.kind = "form" && d.name = name) term_call.declarations in
+    require (List.length form.uses = 1) ("nested term call target: " ^ name))
+    ["identity"; "relay"];
+  let invalid_term = analyze "program P { form identity [] (many value: int) ->[many] int marks {} = value + true term identity(1) }" in
+  require (invalid_term.diagnostics <> []) "invalid term preserves the compiler error";
+  require (List.for_all (fun d -> d.kind <> "parameter") invalid_term.declarations)
+    "failed term check publishes no parameter symbols";
+  require (List.for_all (fun d -> d.kind <> "form" || d.uses = []) invalid_term.declarations)
+    "failed term check publishes no call uses";
 
   let callable_form_source = "/* 😀 value */ program P { form identity [] (many value: int) ->[many] int marks {} = (let many value: int = value in value) + value fn run(value: int): int { return value } }" in
   let callable_forms = analyze ~syntax:Callable callable_form_source in
@@ -582,6 +664,31 @@ let () =
   require (effect_label.diagnostics = []) "same-named form effect label fixture";
   require (List.exists (fun d -> d.kind = "enum" && d.name = "total" && d.uses = []) effect_label.declarations)
     "form effect labels are not type annotations";
+  let equal_text = "return equal[map[Mode]Mode](equal/* Mode */[Mode](left, right), other)" in
+  let mode_type = Octra_vm.Oct_lang.TStruct "Mode" in
+  let equal_expr = Octra_vm.Oct_lang.EEqual (Octra_vm.Oct_lang.TMap (mode_type, mode_type),
+    Octra_vm.Oct_lang.EEqual (mode_type, Octra_vm.Oct_lang.EVar "left", Octra_vm.Oct_lang.EVar "right"),
+    Octra_vm.Oct_lang.EVar "other") in
+  let equal_uses = Amlc_analysis__Type_uses.expressions equal_text 0 (String.length equal_text) equal_expr in
+  require (List.map (fun (name, first, last) -> name, String.sub equal_text first (last - first)) equal_uses
+    = ["Mode", "Mode"; "Mode", "Mode"; "Mode", "Mode"])
+    "equal types follow the official type parser and skip comments";
+  let _, inner_mode, _ = List.nth equal_uses 2 in
+  require (inner_mode > index_of equal_text "/* Mode */")
+    "the commented Mode is not the inner equal type";
+  require (Amlc_analysis__Type_uses.expressions equal_text 0 (String.length equal_text)
+    (Octra_vm.Oct_lang.EEqual (Octra_vm.Oct_lang.TInt, Octra_vm.Oct_lang.EVar "left", Octra_vm.Oct_lang.EVar "right")) = [])
+    "an equal type that disagrees with the expression publishes nothing";
+  let checked_equal_source = "program P { enum Mode { Ready } fn run(left: int, right: int): bool { return equal/* Mode */[int](left, right) } }" in
+  let checked_equal = analyze checked_equal_source in
+  require (checked_equal.diagnostics = []) ("checked equal fixture: " ^
+    String.concat "; " (List.map (fun d -> d.message) checked_equal.diagnostics));
+  check_ranges checked_equal_source checked_equal;
+  require (List.exists (fun d -> d.kind = "enum" && d.name = "Mode" && d.uses = []) checked_equal.declarations)
+    "a primitive equal type does not consume a commented name";
+  let invalid_equal = analyze "program P { enum Mode { Ready } fn run(): bool { return equal[Mode](1, 2) } }" in
+  require (invalid_equal.diagnostics <> [] && List.for_all (fun d -> d.uses = []) invalid_equal.declarations)
+    "failed equal check clears type uses";
   let struct_source = "/* 😀 Box */ interface I { fn get(value: Box): Box } program P { struct Box { n: int } struct Holder { box: Box } state { boxes: map[int]Box holder: Holder } fn run(): int { return self.boxes[0].n } }" in
   let structs = analyze struct_source in
   require (structs.diagnostics = []) ("struct type references fixture: " ^
@@ -610,6 +717,63 @@ let () =
   check_ranges state_keyword_source state_keyword;
   require (List.exists (fun d -> d.kind = "field" && d.name = "value" && List.length d.uses = 1)
     state_keyword.declarations) "state field names use official identifier rules";
+  let totals = List.filter (fun d -> d.kind = "field" && d.name = "total") state_analysis.declarations in
+  require (List.length totals = 2) "state and struct totals stay separate symbols";
+  let struct_total = List.find (fun d -> match d.selection with
+    | Some span -> span.first < index_of state_source "state {" | _ -> false) totals in
+  let state_total = List.find (fun d -> match d.selection with
+    | Some span -> span.first > index_of state_source "state {" | _ -> false) totals in
+  require (List.length struct_total.uses = 1 && state_source.[(List.hd struct_total.uses).first - 1] = '.')
+    "nested total resolves to the struct field";
+  require (List.length state_total.uses = 5) "nested total is not a root state use";
+  let nested_fields_source = "program P { struct Contact { active: int } struct Account { contact: Contact count: int } state { account: Account accounts: map[int]Account nested: map[int]map[int]Account keys: map[int]int entries: list[int] } fn run(): int { return self.account.contact.active + self.accounts[self.keys[0]].count + self.nested[0][1].count + self.entries.length } }" in
+  let nested_fields = analyze nested_fields_source in
+  require (nested_fields.diagnostics = []) ("nested struct field fixture: " ^
+    String.concat "; " (List.map (fun d -> d.message) nested_fields.diagnostics));
+  check_ranges nested_fields_source nested_fields;
+  let field_at source marker name =
+    let first = index_of source marker + String.length marker in
+    require (String.sub source first (String.length name) = name) marker;
+    List.find (fun d -> d.kind = "field" && d.name = name && match d.selection with
+      | Some span -> span.first = first | None -> false) in
+  require (List.length (field_at nested_fields_source "struct Contact { " "active" nested_fields.declarations).uses = 1)
+    "two-owner path indexes the leaf";
+  require (List.length (field_at nested_fields_source "struct Account { " "contact" nested_fields.declarations).uses = 1)
+    "two-owner path indexes the intermediate field";
+  require (List.length (field_at nested_fields_source "contact: Contact " "count" nested_fields.declarations).uses = 2)
+    "indexed and nested-map receivers share the struct field";
+  require (not (List.exists (fun d -> d.kind = "field" && d.name = "length") nested_fields.declarations))
+    "list length is not a struct field";
+  let length_source = "program P { struct Account { name: int items: list[int] tags: map[int]int length: int } state { account: Account accounts: map[int]Account } fn run(): int { return self.account.items.length + self.account.tags.length + self.account.name + self.account.length + self.accounts[self.account.items.length].name } }" in
+  let length_fields = analyze length_source in
+  require (length_fields.diagnostics = []) ("struct length fixture: " ^
+    String.concat "; " (List.map (fun d -> d.message) length_fields.diagnostics));
+  check_ranges length_source length_fields;
+  require (List.length (field_at length_source "struct Account { " "name" length_fields.declarations).uses = 2)
+    "a list length keeps the neighboring struct field";
+  require (List.length (field_at length_source "name: int " "items" length_fields.declarations).uses = 2)
+    "a nested list length indexes the struct field twice";
+  require (List.length (field_at length_source "items: list[int] " "tags" length_fields.declarations).uses = 1)
+    "a nested map length indexes the struct field";
+  let named_length = field_at length_source "tags: map[int]int " "length" length_fields.declarations in
+  require (List.length named_length.uses = 1) "a field named length is not the list property";
+  let named_length_use = List.hd named_length.uses in
+  require (length_source.[named_length_use.first - 1] = '.'
+    && String.sub length_source (named_length_use.first - 8) 7 = "account")
+    "the length field use is self.account.length";
+  let ambiguous_source = "program P { struct A { n: int } struct B { n: int } state { a: A b: B } fn run(): int { return self.a.n + self.b.n } }" in
+  let ambiguous = analyze ambiguous_source in
+  require (ambiguous.diagnostics = []) "same-named struct fields fixture";
+  check_ranges ambiguous_source ambiguous;
+  require (List.length (field_at ambiguous_source "struct A { " "n" ambiguous.declarations).uses = 1
+    && List.length (field_at ambiguous_source "struct B { " "n" ambiguous.declarations).uses = 1)
+    "same-named struct fields keep their own uses";
+  let spaced_source = "program P { struct Box { total: int } state { box: Box } fn run(): int { return self /* gap */ . box . total } }" in
+  let spaced = analyze spaced_source in
+  require (spaced.diagnostics = []) "spaced storage path fixture";
+  check_ranges spaced_source spaced;
+  require (List.length (field_at spaced_source "struct Box { " "total" spaced.declarations).uses = 1)
+    "comments between storage-path tokens stay outside the field use";
   let unsupported_member = analyze (schema ^ "fn run(person: Account): int { return person.count } }") in
   require (unsupported_member.diagnostics <> [] && unsupported_member.members <> []
     && List.for_all (fun site -> site.items = []) unsupported_member.members)
@@ -652,10 +816,32 @@ let () =
   let unresolved = analyze
     "program Example { fn run(): int { return unknown_value } }" in
   require (unresolved.status = Checked && unresolved.diagnostics <> []) "compiler rejection";
-  require (List.for_all (fun d -> d.span = None) unresolved.diagnostics)
-    "no fabricated range for an unlocated compiler error";
+  require (List.for_all (fun d -> d.span = Some {
+    first = String.length "program Example { fn run(): int { ";
+    last = String.length "program Example { fn run(): int { " }) unresolved.diagnostics)
+    "compiler string header locates the rejected return statement";
   require (List.exists (fun d -> d.name = "run") unresolved.declarations)
     "parsed metadata survives a checking error";
+
+  let unlocated = analyze
+    "interface I { fn f(): int }\ninterface I { fn f(): int }\nprogram P { fn run(): int { return 1 } }" in
+  require (unlocated.diagnostics <> [] && List.for_all (fun d -> d.span = None)
+    unlocated.diagnostics) "no fabricated range for errors without a header";
+  let mismatch_source = "// 한글😀\r\nprogram P {\r\n  fn inc(n: int): int { return n }\r\n  fn run(): int { return inc(true) }\r\n}" in
+  let mismatch = analyze mismatch_source in
+  let return_offset = index_of mismatch_source "return inc" in
+  require (List.exists (fun d -> d.span = Some { first = return_offset; last = return_offset })
+    mismatch.diagnostics) "multiline compiler type error location";
+  let own_import_error = analyze ~resolve:(fun _ -> Some "interface I { fn f(): int }")
+    ("import I from \"./types.aml\"\n" ^ mismatch_source) in
+  require (List.exists (fun d -> d.span = Some {
+    first = return_offset + String.length "import I from \"./types.aml\"\n";
+    last = return_offset + String.length "import I from \"./types.aml\"\n" })
+    own_import_error.diagnostics) "compile_multi retains current-document origin";
+  let foreign_error = analyze ~resolve:(fun _ -> Some "interface I { fn f(@): int }")
+    "import I from \"./types.aml\"\nprogram P { fn run(): int { return 1 } }" in
+  require (foreign_error.diagnostics <> [] && List.for_all (fun d -> d.span = None)
+    foreign_error.diagnostics) "import parser errors stay unlocated in current document";
 
   let utf8_source = "// 한글\nprogram Example { fn inc(n: int): int { return @ } }" in
   let utf8 = analyze ~syntax:Callable utf8_source in
@@ -718,8 +904,70 @@ let () =
   (* This is accepted by standalone AMLC but rejected by the old helper.
      Preserve official semantics, not the old fixture's 'invalid' label. *)
   let signed = "program Unsafe { public fn transfer(amount: int): int { return amount } }" in
-  require (Result.is_ok (Octra_vm.Aml_source.compile signed)) "upstream signed baseline";
+  require (Result.is_ok (Octra_vm.Aml_source.compile ~syntax:Octra_vm.Oct_gen.Source signed))
+    "upstream signed baseline";
   require ((analyze signed).diagnostics = []) "no Lite Node-only rejection";
+
+  let diagnostic_text analysis =
+    String.concat "\n" (List.map (fun diagnostic -> diagnostic.message) analysis.diagnostics) in
+  let mentions text analysis =
+    let haystack = diagnostic_text analysis in
+    let needle = String.length text and limit = String.length haystack in
+    let rec scan index =
+      index + needle <= limit &&
+      (String.sub haystack index needle = text || scan (index + 1)) in
+    scan 0 in
+  let source_program body = "program P { fn f" ^ body ^ " }" in
+  let accept body label =
+    let source = source_program body in
+    let analysis = analyze source in
+    require (analysis.diagnostics = [])
+      (label ^ ": " ^ diagnostic_text analysis) in
+  let reject body text label =
+    let analysis = analyze (source_program body) in
+    require (mentions text analysis)
+      (label ^ ": " ^ diagnostic_text analysis) in
+  accept "(raw: string): address { return to_address(raw) }"
+    "to_address accepts one text argument";
+  reject "(n: int): address { return to_address(n) }"
+    "address input type differs" "to_address rejects a non-text argument";
+  reject "(): address { return to_address() }"
+    "to_address requires one argument" "to_address requires one argument";
+  accept "(value: option[int]): int { return unwrap(value) }"
+    "unwrap accepts an option expression";
+  accept "(value: option[int]): bool { return is_some(value) }"
+    "is_some accepts an option expression";
+  accept "(text: string): int { return split(text, \",\") }"
+    "split has an integer result in Source mode";
+  accept "(): option[int] { return none() }"
+    "none() remains an option value";
+  let contract_option =
+    "contract C { fn f(value: option[int]): int { return unwrap(value) } }" in
+  require ((analyze contract_option).diagnostics = [])
+    ("contract unwrap follows Source mode: " ^ diagnostic_text (analyze contract_option));
+  let many count item =
+    String.concat "\n" (List.init count item) in
+  let reject_source source text label =
+    let analysis = analyze ~resolve:(fun _ -> Some "interface Provided { fn m(): int }\n") source in
+    require (mentions text analysis)
+      (label ^ ": " ^ diagnostic_text analysis) in
+  reject_source
+    (many 257 (fun index -> Printf.sprintf "import I%d from \"i%d.aml\"" index index)
+      ^ "\nprogram P { fn f(): int { return 1 } }")
+    "Program import count exceeds compiler limit" "import count limit";
+  reject_source
+    ("import " ^ String.concat ", " (List.init 257 (fun index -> Printf.sprintf "N%d" index))
+      ^ " from \"names.aml\"\nprogram P { fn f(): int { return 1 } }")
+    "Program import name count exceeds compiler limit" "import name limit";
+  reject_source
+    (many 257 (fun index -> Printf.sprintf "interface I%d { fn m(): int }" index)
+      ^ "\n")
+    "Program interface count exceeds compiler limit" "interface count limit";
+  reject_source
+    ("interface Huge {\n"
+      ^ many 4097 (fun index -> Printf.sprintf "  fn m%d(): int" index)
+      ^ "\n}\n")
+    "Program interface method count exceeds compiler limit" "interface method limit";
 
   let oversized = analyze (String.make 1_000_001 ' ') in
   require (oversized.status = Input_too_large) "input limit";
