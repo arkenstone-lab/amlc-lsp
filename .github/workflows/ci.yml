@@ -66,6 +66,7 @@ jobs:
     uses: ./.github/workflows/zed-server-assets.yml
     with:
       release_tag: v0.3.0
+      source_commit: ${{ github.sha }}
     permissions:
       contents: read
 

@@ -404,9 +404,10 @@ def main():
             struct_total = utf16_column(state_text, state_text.index('struct Box { ') + len('struct Box { '))
             send('textDocument/definition', {'textDocument': {'uri': state_uri}, 'position': {
                  'line': 0, 'character': nested_column}}, 3520)
-            assert response(3520)['result'] == [{'uri': state_uri, 'range': {
+            nested_definition = response(3520)['result']
+            assert nested_definition == [{'uri': state_uri, 'range': {
                 'start': {'line': 0, 'character': struct_total},
-                'end': {'line': 0, 'character': struct_total + 5}}}], response(3520)['result']
+                'end': {'line': 0, 'character': struct_total + 5}}}], nested_definition
             send('textDocument/hover', {'textDocument': {'uri': state_uri}, 'position': {
                  'line': 0, 'character': nested_column}}, 3525)
             assert response(3525)['result']['contents']['value'] == 'field total: int'

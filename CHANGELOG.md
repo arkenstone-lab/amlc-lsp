@@ -18,6 +18,9 @@
   locations from locations supplied for imported files.
 - The standalone Rehovot regression helper uses the same Lite Node revision as
   the Nix package; metadata checks catch mismatched revisions.
+- Zed packaging checks build the PR commit and use tests and license notices
+  from the selected server source, rather than testing a previous release
+  against newer feature expectations.
 
 ### Compatibility
 
