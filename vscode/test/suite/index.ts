@@ -1,6 +1,7 @@
 import * as assert from "node:assert/strict";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { runPrebuiltTest } from "./prebuilt";
 
 interface ServerStatus {
   command: string;
@@ -30,6 +31,10 @@ async function waitFor<T>(
 }
 
 export async function run(): Promise<void> {
+  if (process.env.AMLC_PREBUILT_TEST === "1") {
+    await runPrebuiltTest();
+    return;
+  }
   const extension = vscode.extensions.getExtension<AppliedMLExtensionApi>(
     "arkenstone-labs.appliedml",
   );

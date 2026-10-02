@@ -1,5 +1,15 @@
 # Change Log
 
+## Unreleased
+
+- Download and verify the matching prebuilt server when no configured, PATH,
+  or OPAM server is available. Cache the complete installation by version and
+  platform without installing or changing AMLC or OPAM.
+- Add `amlcLsp.server.autoDownload` to keep a manual-only setup.
+- Validate SHA-256, archive paths and extraction sizes before running a download.
+- Ignore stale installer paths and preserve explicit server configuration.
+- Test downloaded servers in VS Code on all five supported host targets.
+
 ## 0.4.0
 
 - Target the amlc-lsp 0.4 release line and install the server from the `v0.4.0`

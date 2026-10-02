@@ -1,7 +1,7 @@
 # Third-party notices
 
-The compiled extension bundles `vscode-languageclient` and its runtime
-dependencies. Build-only packages are not distributed in the VSIX.
+The compiled extension bundles `vscode-languageclient`, archive libraries, and
+their runtime dependencies. Build-only packages are not distributed in the VSIX.
 
 ## Microsoft language client packages
 
@@ -66,7 +66,7 @@ LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 
-## semver
+## semver and @isaacs/fs-minipass
 
 Copyright (c) Isaac Z. Schlueter and Contributors
 
@@ -81,3 +81,36 @@ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
 LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
+
+## tar, chownr, minipass and yallist
+
+These packages are distributed under the
+[Blue Oak Model License 1.0.0](https://blueoakcouncil.org/license/1.0.0).
+
+## minizlib, yauzl and pend
+
+Minizlib was created by Isaac Z. Schlueter and is a derivative work of Node.js.
+
+Copyright (c) 2017-2023 Isaac Z. Schlueter and Contributors
+Copyright (c) 2017-2023 Node.js contributors. All rights reserved.
+Copyright (c) 2017-2023 Joyent, Inc. and other Node contributors. All rights reserved.
+Copyright (c) 2014 Josh Wolfe (yauzl)
+Copyright (c) 2014 Andrew Kelley (pend)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

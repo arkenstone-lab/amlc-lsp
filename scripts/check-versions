@@ -8,6 +8,7 @@ tree_sitter_version=$(sed -n 's/^[[:space:]]*"version": "\(.*\)",$/\1/p' tree-si
 zed_extension_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' zed/extension.toml)
 zed_crate_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' zed/Cargo.toml | head -1)
 zed_server_version=$(sed -n 's/^const SERVER_VERSION: &str = "\([^"]*\)";$/\1/p' zed/src/lib.rs)
+vscode_download_version=$(sed -n 's/^export const downloadedServerVersion = "\([^"]*\)";$/\1/p' vscode/src/serverDownload.ts)
 zed_lock_version=$(awk '
   /^name = "zed-aml"$/ { in_crate = 1; next }
   in_crate && /^version = / { gsub(/"/, "", $3); print $3; exit }
@@ -49,7 +50,7 @@ vscode_installer_amlc=$(sed -n 's/^const requiredAmlcVersion = "\([^"]*\)";$/\1/
 nvim_installer_amlc=$(sed -n 's/^local required_amlc_version = "\([^"]*\)"$/\1/p' nvim/lua/amlc_lsp/opam.lua)
 
 test -n "$root_version"
-for candidate in "$opam_version" "$grammar_version" "$tree_sitter_version" "$zed_extension_version" "$zed_crate_version" "$zed_lock_version" "$zed_server_version" "$nix_version" "$server_version"; do
+for candidate in "$opam_version" "$grammar_version" "$tree_sitter_version" "$zed_extension_version" "$zed_crate_version" "$zed_lock_version" "$zed_server_version" "$vscode_download_version" "$nix_version" "$server_version"; do
   test "$candidate" = "$root_version" || {
     printf 'version mismatch: expected %s, found %s\n' "$root_version" "$candidate" >&2
     exit 1

@@ -49,6 +49,43 @@ jobs:
           path: vscode/appliedml-lsp-*.vsix
           if-no-files-found: error
 
+  vscode-prebuilt-server:
+    name: VS Code downloaded server (${{ matrix.os }})
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04-arm, macos-15-intel, macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    env:
+      AMLC_PREBUILT_TEST: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: vscode/package-lock.json
+      - name: Install locked dependencies
+        working-directory: vscode
+        run: npm ci
+      - name: Test downloaded server on Linux
+        if: ${{ runner.os == 'Linux' }}
+        working-directory: vscode
+        run: xvfb-run -a npm test
+      - name: Test downloaded server
+        if: ${{ runner.os != 'Linux' }}
+        working-directory: vscode
+        run: npm test
+      - name: Preserve Extension Host logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: vscode-prebuilt-logs-${{ matrix.os }}
+          path: vscode/out-test/prebuilt-logs
+          if-no-files-found: ignore
+          retention-days: 7
+
   zed-extension:
     name: Zed extension build
     runs-on: ubuntu-latest

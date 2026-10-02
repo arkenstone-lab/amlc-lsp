@@ -6,11 +6,26 @@ and exposes the diagnostics and language features advertised by the server.
 
 ## Server setup
 
-The extension starts `amlc-lsp` from `PATH` by default. If that fails, it checks
-the active OPAM switch for an existing server. When the switch already contains
-the compatible `amlc.0.1.0~preview` package but not the server, choose
-**Install with OPAM** in the notification or run **AppliedML: Install Language
-Server with OPAM**. After confirmation, the extension installs only
+Automatic server downloads are unreleased; the published 0.4.0 extension uses
+PATH and OPAM only.
+
+The development extension prefers `amlcLsp.server.path`, then `amlc-lsp` on
+PATH or in the active OPAM switch. When none is available, it downloads the
+matching 0.4.0 server from the official GitHub release. The archive includes the
+compiler-linked server, GMP, corresponding source and license notices, so no
+OCaml, OPAM or separate AMLC installation is required. Downloads are SHA-256
+verified, bounded, and cached by version and platform in VS Code's extension
+storage. Completed caches work offline and are reused on restart.
+
+Supported hosts are macOS (Apple Silicon and Intel), Linux (ARM64 and x86_64),
+and x86_64 Windows. Remote SSH, WSL and Codespaces use the remote host platform.
+Linux archives target glibc, not Alpine/musl. Unsupported platforms or restricted
+networks require a local server. Set `amlcLsp.server.autoDownload` to `false` to
+disable automatic downloads. A broken configured or existing server is reported
+rather than silently replaced; existing local servers require manual upgrades.
+
+For an OPAM-based setup, run **AppliedML: Install Language Server with OPAM**.
+After confirmation, the extension installs only
 `amlc-lsp.0.4.0` from its versioned release tag and reconnects
 automatically. It neither installs nor replaces AMLC.
 
@@ -48,14 +63,15 @@ Exact behavior and cross-file limits are documented in the
 
 | Setting | Purpose |
 | --- | --- |
-| `amlcLsp.server.path` | Absolute server path; empty searches `PATH` |
+| `amlcLsp.server.path` | Explicit server path; empty uses local discovery then download |
+| `amlcLsp.server.autoDownload` | Download a prebuilt server when none is available (default: true) |
 | `amlcLsp.server.arguments` | Additional server arguments |
 | `amlcLsp.server.environment` | Environment variables added to the server process |
 | `amlcLsp.opam.path` | OPAM executable used to find or install the server |
 | `amlcLsp.dialect` | `auto`, `appliedml`, or `legacy` syntax selection |
 | `amlcLsp.trace.server` | LSP message tracing in the AppliedML output channel |
 
-Changes to the server or OPAM path, arguments, or environment restart the
+Changes to the server or OPAM path, automatic-download setting, arguments, or environment restart the
 server automatically.
 The **AppliedML: Restart Language Server** command remains available for manual
 recovery.
@@ -63,7 +79,9 @@ recovery.
 ## Privacy and workspace support
 
 Analysis runs locally. This extension does not send source code or telemetry to
-Arkenstone Labs. Because it starts a local executable and requires ordinary
+Arkenstone Labs. Automatic setup contacts GitHub for public release metadata
+and the platform archive; it does not upload workspace contents. Because it
+starts a local executable and requires ordinary
 files, it is disabled for untrusted and virtual workspaces. Remote SSH, WSL, and
 Codespaces run the extension and server in the remote workspace environment.
 
@@ -79,3 +97,11 @@ code --extensionDevelopmentPath="$PWD"
 Run `npm test` for the Extension Host integration test. It downloads VS Code
 1.100.0 into the ignored `.vscode-test` directory and verifies activation,
 diagnostics, completion, automatic restart, and version compatibility.
+
+For the optional real-download test, run `AMLC_PREBUILT_TEST=1 npm test`.
+The runner creates and cleans up a fresh isolated profile. It disables PATH and OPAM
+discovery, verifies the downloaded compiler-backed server's editor features,
+and checks cache reuse on restart. The separate downloaded-server CI job runs
+this test on all five supported host targets and preserves Extension Host logs.
+It requires public release assets and GitHub connectivity; the regular
+extension tests continue to use a local fixture server.
