@@ -130,16 +130,13 @@ Visual Studio Code, it can also be installed from the command line:
 code --install-extension arkenstone-labs.appliedml
 ```
 
-For a manual installation, download `appliedml-lsp-0.4.0.vsix` from the
+For a manual installation, download `appliedml-lsp-0.4.1.vsix` from the
 [v0.4.0 release](https://github.com/arkenstone-lab/amlc-lsp/releases/tag/v0.4.0)
 and run **Extensions: Install from VSIX**. The Visual Studio Code client is
 versioned independently at the patch level and does not bundle the server or
 compiler.
 
-Automatic server downloads are currently unreleased; the published 0.4.0
-extension uses the PATH/OPAM setup only.
-
-The development extension prefers an explicitly configured server, then one
+Starting with extension 0.4.1, the client prefers an explicitly configured server, then one
 on PATH or in the active OPAM switch. If none is available, it downloads the
 matching 0.4.0 server archive from GitHub Releases into VS Code's extension
 storage. It verifies the release asset's SHA-256 before extracting and running

@@ -6,10 +6,7 @@ and exposes the diagnostics and language features advertised by the server.
 
 ## Server setup
 
-Automatic server downloads are unreleased; the published 0.4.0 extension uses
-PATH and OPAM only.
-
-The development extension prefers `amlcLsp.server.path`, then `amlc-lsp` on
+Starting with extension 0.4.1, the client prefers `amlcLsp.server.path`, then `amlc-lsp` on
 PATH or in the active OPAM switch. When none is available, it downloads the
 matching 0.4.0 server from the official GitHub release. The archive includes the
 compiler-linked server, GMP, corresponding source and license notices, so no

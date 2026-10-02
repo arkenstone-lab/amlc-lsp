@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## VS Code extension 0.4.1
 
 - VS Code can download the versioned prebuilt server when no local server is
   available, with checksum verification and an opt-out setting.

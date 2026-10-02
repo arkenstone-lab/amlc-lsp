@@ -1,6 +1,6 @@
 # Change Log
 
-## Unreleased
+## 0.4.1
 
 - Download and verify the matching prebuilt server when no configured, PATH,
   or OPAM server is available. Cache the complete installation by version and
