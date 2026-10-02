@@ -4,7 +4,7 @@ Compiler-backed diagnostics, completion, and code navigation for Applied Meta
 Language (AppliedML) in Visual Studio Code, Zed, and Neovim. Analysis runs
 locally; no RPC node is required.
 
-The 0.3.0 server links the official AMLC library supplied at build time by a
+The 0.4.0 server links the official AMLC library supplied at build time by a
 separate `amlc` package. OPAM source installs and Nix builds use this
 implementation. Prebuilt native server archives contain the resulting linked
 server and do not require an OPAM switch or an `amlc` executable at runtime.
@@ -19,7 +19,7 @@ a terminal REPL.
 
 ### Install with OPAM
 
-Version 0.3.0 is distributed as an OPAM-managed source installation. It depends
+Version 0.4.0 is distributed as an OPAM-managed source installation. It depends
 on the separate `amlc.0.1.0~preview` package and links that package's public
 `amlc.vm` library. It does not bundle or install a private compiler or the
 legacy `rehovot-check` helper.
@@ -39,7 +39,7 @@ packages with the system package manager.
 
 On native x86_64 Windows, install OPAM with its
 [official Windows installer](https://opam.ocaml.org/doc/Install.html) and use the
-default MinGW toolchain selected during `opam init`. The 0.3.0 qualification
+default MinGW toolchain selected during `opam init`. The 0.4.0 qualification
 targets macOS, Linux, and native x86_64 Windows; other architectures are not
 individually verified.
 
@@ -49,31 +49,34 @@ Run `opam init` once if OPAM has not been initialized, then create a dedicated
 switch:
 
 ```sh
-opam switch create amlc-lsp-0.3 4.14.2
+opam switch create amlc-lsp-0.4 4.14.2
 ```
 
 Unix shells can activate it with:
 
 ```sh
-eval "$(opam env --switch=amlc-lsp-0.3)"
+eval "$(opam env --switch=amlc-lsp-0.4)"
 ```
 
 Activation is optional for the remaining commands because they name the switch
 explicitly.
 
-#### Install 0.3.0
+#### Install 0.4.0
 
 AMLC is not yet available from the central OPAM repository, so install the
 tagged LSP source as a pin:
 
 ```sh
-opam pin add amlc-lsp.0.3.0 "git+https://github.com/arkenstone-lab/amlc-lsp.git#v0.3.0" --switch=amlc-lsp-0.3
+opam pin add amlc-lsp.0.4.0 "git+https://github.com/arkenstone-lab/amlc-lsp.git#v0.4.0" --switch=amlc-lsp-0.4
 ```
 
 Accept the dependent-pin prompt. OPAM then pins the audited, unmodified AMLC
 commit and installs AMLC and amlc-lsp as separate packages in the same switch.
+For 0.4.0, the audited AMLC commit is `1f24fa97`. Older AMLC commits can use
+the same `0.1.0~preview` version string but expose a different library API;
+when upgrading, accept the dependent-pin update in this manual installation.
 An unrelated `amlc` executable on PATH cannot satisfy this build-time library
-dependency. Because AMLC is absent from the central repository, 0.3.0 cannot be
+dependency. Because AMLC is absent from the central repository, 0.4.0 cannot be
 installed with `opam install amlc-lsp` alone.
 
 #### Verify the installation
@@ -81,9 +84,9 @@ installed with `opam install amlc-lsp` alone.
 These commands work without activating the switch:
 
 ```sh
-opam list --installed amlc amlc-lsp --switch=amlc-lsp-0.3
-opam exec --switch=amlc-lsp-0.3 -- amlc version
-opam var bin --switch=amlc-lsp-0.3
+opam list --installed amlc amlc-lsp --switch=amlc-lsp-0.4
+opam exec --switch=amlc-lsp-0.4 -- amlc version
+opam var bin --switch=amlc-lsp-0.4
 ```
 
 The final command prints the directory containing `amlc-lsp` (or
@@ -91,7 +94,7 @@ The final command prints the directory containing `amlc-lsp` (or
 the editor's server path to that executable. Confirm diagnostics and completion
 inside the editor; locating the executable alone does not verify the LSP
 connection. Both source pins remain visible through
-`opam pin list --switch=amlc-lsp-0.3`.
+`opam pin list --switch=amlc-lsp-0.4`.
 
 ### Build with Nix
 
@@ -127,8 +130,8 @@ Visual Studio Code, it can also be installed from the command line:
 code --install-extension arkenstone-labs.appliedml
 ```
 
-For a manual installation, download `appliedml-lsp-0.3.2.vsix` from the
-[v0.3.0 release](https://github.com/arkenstone-lab/amlc-lsp/releases/tag/v0.3.0)
+For a manual installation, download `appliedml-lsp-0.4.0.vsix` from the
+[v0.4.0 release](https://github.com/arkenstone-lab/amlc-lsp/releases/tag/v0.4.0)
 and run **Extensions: Install from VSIX**. The Visual Studio Code client is
 versioned independently at the patch level and does not bundle the server or
 compiler.
@@ -137,9 +140,11 @@ The extension uses `amlc-lsp` from PATH by default. If that fails, it checks the
 active OPAM switch for an existing server. When the switch already contains
 `amlc.0.1.0~preview` but not `amlc-lsp`, choose **Install with OPAM** in the
 notification or run **AppliedML: Install Language Server with OPAM**. After
-confirmation, the extension installs only `amlc-lsp.0.3.0` from its immutable
-release commit. It does not install, replace, or repin AMLC. It then records the
-server's absolute path and reconnects automatically.
+confirmation, the extension installs only `amlc-lsp.0.4.0` from the versioned
+`v0.4.0` release tag. It does not install, replace, or repin AMLC. It then records
+the server's absolute path and reconnects automatically. Use the manual source
+installation above to upgrade an older server or AMLC source pin; automatic
+discovery keeps an existing executable.
 
 Set `amlcLsp.opam.path` when the OPAM executable is not available as `opam`. Nix
 and other manual installations can instead set `amlcLsp.server.path` to the
@@ -154,7 +159,7 @@ tokens arrive.
 Once the AppliedML extension is available in Zed's extension registry, install
 it from **zed: extensions**. The extension honors an explicitly configured
 server first, then an `amlc-lsp` executable already on `PATH`. Otherwise it
-downloads the matching 0.3.0 server release on macOS (Apple Silicon or Intel),
+downloads the matching 0.4.0 server release on macOS (Apple Silicon or Intel),
 Linux (AArch64 or x86_64), and x86_64 Windows. The archive includes the exact
 corresponding GMP source and third-party notices alongside the dynamically
 linked GMP library. macOS and Linux archives carry the upstream GMP source;
@@ -208,11 +213,15 @@ vim.opt.runtimepath:prepend("/absolute/path/to/amlc-lsp/nvim")
 The runtime uses `amlc-lsp` from `PATH`, or `opam exec -- amlc-lsp` when only
 OPAM is visible. If the active or project-local switch already contains
 `amlc.0.1.0~preview` but not the server, run `:AmlcLspInstall`. Neovim asks for
-confirmation, installs `amlc-lsp.0.3.0` from the immutable release commit, and
+confirmation, installs `amlc-lsp.0.4.0` from the versioned release tag, and
 reconnects. The command refuses missing or incompatible AMLC and uses
 `--ignore-pin-depends`, so it never installs, replaces, or repins AMLC. Set
 `vim.g.amlc_lsp_opam_path` before adding the runtime when the OPAM executable
 has a nonstandard name or location.
+
+Use the manual source installation above when upgrading an older server or
+AMLC source pin. The installer checks AMLC's package version; it does not
+upgrade a same-version compiler from an older source commit.
 
 For a configuration without the repository runtime, install the server
 manually and use the built-in LSP snippet from `nvim/lsp/amlc_lsp.lua`.
@@ -317,6 +326,35 @@ The server uses the AMLC library selected at build time; it does not invoke an
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the build, test, and implementation
 workflow, and [CHANGELOG.md](CHANGELOG.md) for user-visible changes.
+
+## Release preparation
+
+Keep release history in [CHANGELOG.md](CHANGELOG.md) and GitHub Releases, without
+a separate release-notes file. Use `v0.4.0` as the GitHub release title, matching
+the previous releases. Write the Markdown body when preparing the GitHub release,
+following the 0.3.0 structure: a short introduction, Highlights, Install the
+server, Visual Studio Code, and Current limits. Include the compiler-pin upgrade
+instructions and the status of Zed distribution where relevant.
+
+Before publishing 0.4.0:
+
+1. Finish the release PR and require all platform checks to pass on the final
+   commit, including the release documentation changes.
+2. Merge the release preparation and create `v0.4.0` at the merged commit. Never
+   move a published version tag: the editor source installers use that tag.
+3. Create a draft GitHub release using that format. Run **Publish
+   Zed server assets** with `release_tag: v0.4.0` to build and attach the five
+   tagged server archives.
+4. Attach `appliedml-lsp-0.4.0.vsix` from the `appliedml-vsix` artifact of a
+   successful CI run for the tagged source. Inspect the draft's files and
+   confirm that its server archives passed tests before publishing the release.
+5. Publish the VS Code extension to the Visual Studio Marketplace and Open VSX,
+   and submit the Zed registry update for the released extension revision.
+   Distribute editor updates only after their server tag and assets are public.
+6. Verify installation through each editor's published distribution. Neovim
+   users update this repository runtime and use the source installation guide
+   to upgrade an existing server. Prepare VS Code prebuilt-server downloads in
+   a separate PR.
 
 ## License
 

@@ -10,6 +10,7 @@ version=$1
 target=$2
 server=$3
 gmp_source=$4
+server_source=${SERVER_SOURCE:-.}
 archive_dir="amlc-lsp-v${version}-${target}"
 stage="_build/zed-server-assets/${archive_dir}"
 case "$target" in
@@ -29,7 +30,7 @@ mkdir -p "_build/zed-server-assets"
 rm -rf "$stage"
 mkdir -p "$stage/source"
 cp "$server" "$stage/$executable"
-cp LICENSE THIRD_PARTY_NOTICES.md "$stage/"
+cp "$server_source/LICENSE" "$server_source/THIRD_PARTY_NOTICES.md" "$stage/"
 cp "$gmp_source" "$stage/source/"
 if [ -n "${THIRD_PARTY_LICENSES:-}" ]; then
   test -d "$THIRD_PARTY_LICENSES"
@@ -81,7 +82,7 @@ case "$target" in
     ;;
 esac
 
-python3 amlc_adapter/server_test.py "$stage/$executable"
+python3 "$server_source/amlc_adapter/server_test.py" "$stage/$executable"
 case "$target" in
   *-pc-windows-gnu)
     output=$(cd "$(dirname "$output")" && pwd)/$(basename "$output")

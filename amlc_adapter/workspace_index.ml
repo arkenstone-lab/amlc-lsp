@@ -175,7 +175,7 @@ let valid_document roots overlays path source =
       let target = canonical (Filename.concat (Filename.dirname path) relative) in
       if inside roots target then read_source overlays target else None
     with Unix.Unix_error _ -> None in
-  match Aml_source.compile_multi
+  match Aml_source.compile_multi ~syntax:Oct_gen.Source
       (fun requested -> if requested = path then Some source else resolve requested) path with
   | Ok _ -> true
   | Error _ -> false

@@ -65,7 +65,7 @@ export async function run(): Promise<void> {
   }, "the language server connection");
   assert.equal(document.languageId, "appliedml");
   assert.equal(connected.serverName, "amlc-lsp");
-  assert.equal(connected.serverVersion, "0.3.0");
+  assert.equal(connected.serverVersion, "0.4.0");
   assert.equal(connected.compatible, true);
   assert.equal(connected.command, process.execPath);
 

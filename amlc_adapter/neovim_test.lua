@@ -32,7 +32,10 @@ local function wait(predicate, message)
   assert(vim.wait(20000, predicate, 25), message)
 end
 local function request(method, params)
-  local response = assert(client:request_sync(method, params, 20000, 0), method)
+  -- Change tracking flushes before the client resolves buffer 0 to the current
+  -- buffer. Pass its actual handle so didChange precedes an immediate request.
+  local response = assert(client:request_sync(method, params, 20000,
+    vim.api.nvim_get_current_buf()), method)
   assert(not response.err, vim.inspect(response.err))
   return response.result
 end
@@ -316,7 +319,8 @@ local ok, err = xpcall(function()
   result = request("textDocument/completion", {
     textDocument = document, position = { line = 0, character = #immediate },
   })
-  assert(#result.items == 1 and result.items[1].label == "fresh", "completion raced buffer analysis")
+  assert(#result.items == 1 and result.items[1].label == "fresh",
+    "completion raced buffer analysis: " .. vim.inspect(result))
   before = publications
   vim.api.nvim_buf_set_lines(0, 0, -1, false, {
     "program P {", "fn run(): int {", "/* } */ return 1", "}", "}",

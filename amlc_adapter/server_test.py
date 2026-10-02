@@ -401,12 +401,19 @@ def main():
                 send('textDocument/hover', query, 3510 + index)
                 assert response(3510 + index)['result']['contents']['value'] == label
             nested_column = utf16_column(state_text, state_text.index('].total') + 2)
+            struct_total = utf16_column(state_text, state_text.index('struct Box { ') + len('struct Box { '))
             send('textDocument/definition', {'textDocument': {'uri': state_uri}, 'position': {
                  'line': 0, 'character': nested_column}}, 3520)
-            assert response(3520)['result'] == [], 'nested struct field resolved to root state'
+            nested_definition = response(3520)['result']
+            assert nested_definition == [{'uri': state_uri, 'range': {
+                'start': {'line': 0, 'character': struct_total},
+                'end': {'line': 0, 'character': struct_total + 5}}}], nested_definition
+            send('textDocument/hover', {'textDocument': {'uri': state_uri}, 'position': {
+                 'line': 0, 'character': nested_column}}, 3525)
+            assert response(3525)['result']['contents']['value'] == 'field total: int'
             properties = [(line, column, name) for line, column, name, kind in
                           semantic_ranges(state_uri, state_text, 3521) if kind == 'property']
-            assert len(properties) == 6 and (0, nested_column, 'total') not in properties, properties
+            assert len(properties) == 8 and (0, nested_column, 'total') in properties, properties
             send('textDocument/completion', {'textDocument': {'uri': state_uri}, 'position': {
                  'line': 0, 'character': utf16_column(state_text, state_text.index('return'))}}, 3522)
             completions = response(3522)['result']['items']
@@ -414,7 +421,7 @@ def main():
             assert [item['detail'] for item in completions if item['label'] == 'total'] == ['total: int']
             send('textDocument/documentSymbol', {'textDocument': {'uri': state_uri}}, 3524)
             fields = [item['name'] for item in response(3524)['result'] if item['kind'] == 8]
-            assert fields == ['total', 'boxes'], fields
+            assert fields == ['total', 'boxes', 'total'], fields
             invalid_state = state_text.replace('].total', '].missing')
             send('textDocument/didChange', {'textDocument': {'uri': state_uri, 'version': 2},
                  'contentChanges': [{'text': invalid_state}]})
@@ -466,12 +473,28 @@ def main():
                             'fn run(): int { return self.box.total + self.total } }')
             partial_uri, partial_diagnostics = open_document('partial-rename.aml', partial_text)
             assert partial_diagnostics == [], partial_diagnostics
+            state_decl = partial_text.index('state { total') + len('state { ')
+            state_use = partial_text.rindex('self.total') + len('self.')
+            struct_decl = partial_text.index('struct Box { total') + len('struct Box { ')
+            struct_use = partial_text.index('self.box.total') + len('self.box.')
             partial_query = {'textDocument': {'uri': partial_uri}, 'position': {
-                'line': 0, 'character': partial_text.rindex('self.total') + len('self.') + 1}}
+                'line': 0, 'character': state_use + 1}}
             send('textDocument/prepareRename', partial_query, 3627)
-            assert response(3627)['result'] is None, 'prepareRename trusted a partial occurrence index'
+            assert response(3627)['result']['placeholder'] == 'total'
             send('textDocument/rename', dict(partial_query, newName='updated'), 3628)
-            assert response(3628)['result'] is None, 'rename trusted a partial occurrence index'
+            state_edits = response(3628)['result']['changes'][partial_uri]
+            assert sorted(edit['range']['start']['character'] for edit in state_edits) == sorted(
+                [state_decl, state_use]), state_edits
+            assert all(edit['newText'] == 'updated' for edit in state_edits)
+            struct_query = {'textDocument': {'uri': partial_uri}, 'position': {
+                'line': 0, 'character': struct_use + 1}}
+            send('textDocument/prepareRename', struct_query, 3629)
+            assert response(3629)['result']['placeholder'] == 'total'
+            send('textDocument/rename', dict(struct_query, newName='amount'), 3637)
+            struct_edits = response(3637)['result']['changes'][partial_uri]
+            assert sorted(edit['range']['start']['character'] for edit in struct_edits) == sorted(
+                [struct_decl, struct_use]), struct_edits
+            assert all(edit['newText'] == 'amount' for edit in struct_edits)
 
             workspace_scope = root / 'workspace-scope'
             workspace_scope.mkdir()
@@ -1336,9 +1359,28 @@ def main():
             assert diagnostics(imported_uri) == []
             send("textDocument/didClose", {"textDocument": {"uri": dependency_uri}})
             assert any("source is absent" in d["message"] for d in diagnostics(imported_uri))
+            _, items = open_document("located-compiler-error.aml",
+                "// 한글😀\r\nprogram P {\r\n  fn inc(n: int): int { return n }\r\n  fn run(): int { return inc(true) }\r\n}")
+            error_point = {"line": 3, "character": 18}
+            assert len(items) == 1 and items[0]["range"] == {
+                "start": error_point, "end": error_point}, items
+            assert "No reliable source location" not in items[0]["message"], items
+            _, items = open_document("inline-unicode-compiler-error.aml",
+                "program P { fn run(): int { let text = \"한글😀\" return unknown_value } }")
+            text = "program P { fn run(): int { let text = \"한글😀\" return unknown_value } }"
+            error_point = {"line": 0, "character": utf16_column(text, text.index("return"))}
+            assert len(items) == 1 and items[0]["range"] == {
+                "start": error_point, "end": error_point}, items
+            _, items = open_document("foreign-location.aml",
+                'import I from "./broken-types.aml"\nprogram P { fn run(): int { return 1 } }')
+            dependency_uri, _ = open_document("broken-types.aml", "interface I { fn f(@): int }")
+            send("textDocument/diagnostic", {"textDocument": {"uri": (root / "unsaved" / "foreign-location.aml").as_uri()}}, 3300)
+            items = response(3300)["result"]["items"]
+            assert any("source = ./broken-types.aml line" in item["message"] and
+                       "No reliable source location in the current document" in item["message"] for item in items), items
             _, items = open_document("unlocated.aml",
-                "program P { fn run(): int { return unknown_value } }")
-            assert any("did not supply a source location" in item["message"] for item in items), items
+                "interface I { fn f(): int }\ninterface I { fn f(): int }\nprogram P { fn run(): int { return 1 } }")
+            assert any("No reliable source location in the current document" in item["message"] for item in items), items
             assert not (root / "unsaved").exists()
 
             project = root / "disk-project"

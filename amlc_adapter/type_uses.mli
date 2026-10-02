@@ -8,3 +8,9 @@ val declarations : string -> Octra_vm.Oct_lang.contract -> (string * int * int) 
 (** Named types in AST-matched state, struct, event, constant and interface
     declarations. The caller must require successful original-source checking
     before exposing these ranges as references. *)
+
+val expressions : string -> int -> int -> Octra_vm.Oct_lang.expr ->
+  (string * int * int) list
+(** Named types inside [equal\[Type\]] within one expression span. Offsets are
+    absolute. An ordered lexer match against the expression's [equal] types is
+    required; comments stay outside the type and a mismatch publishes nothing. *)

@@ -26,7 +26,10 @@ type declaration = {
     calls and callable variable expressions, including initializers, assignments, conditions and storage
     keys/values, callable form parameters and expression-local term binders.
     Qualified enum receivers/variants and enum/struct types in callable parameter,
-    return, local and declaration annotations are indexed. Expression type sites remain partial.
+    return, local and declaration annotations are indexed, as are named types
+    inside checked [equal\[Type\]] expressions. A nested storage path indexes
+    the struct field it resolves to. Checked term documents also index
+    colon-bound form parameters and direct calls when the term lexer agrees.
     [visibility] bounds parameter completion to the body and local completion
     after initialization, ending at shadowing or the function's closing brace.
     Disjoint intervals restore an outer binding after a [for] body. A scoped

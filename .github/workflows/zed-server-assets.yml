@@ -6,6 +6,11 @@ on:
       release_tag:
         required: true
         type: string
+      source_commit:
+        description: Immutable candidate commit for PR verification; empty uses the release tag
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -34,7 +39,7 @@ jobs:
       - name: Check out immutable server source
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.release_tag }}
+          ref: ${{ inputs.source_commit || inputs.release_tag }}
           path: release-source
       - uses: ocaml/setup-ocaml@v3
         with:
@@ -60,19 +65,24 @@ jobs:
             echo "GMP_PREFIX=C:/msys64/mingw64"
             echo "GMP_SOURCE=$PWD/mingw-w64-gmp-6.3.0-2.src.tar.zst"
           } >> "$GITHUB_ENV"
-      - name: Validate immutable source version
+      - name: Validate immutable source and version
         shell: bash
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
-          test "$(git -C release-source describe --tags --exact-match)" = "$RELEASE_TAG"
+          if test -n "$SOURCE_COMMIT"; then
+            test "$(git -C release-source rev-parse HEAD)" = "$SOURCE_COMMIT"
+          else
+            test "$(git -C release-source describe --tags --exact-match)" = "$RELEASE_TAG"
+          fi
           version=$(sed -n 's/^version: "\(.*\)"$/\1/p' release-source/amlc-lsp.opam)
           test "v$version" = "$RELEASE_TAG"
       - name: Build the redistributable GMP library
         if: runner.os != 'Windows'
         shell: bash
         run: scripts/build-zed-gmp
-      - name: Install the tagged server against bundled GMP
+      - name: Install the selected server against bundled GMP
         shell: bash
         run: |
           export LD_LIBRARY_PATH="$GMP_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -84,6 +94,7 @@ jobs:
         shell: bash
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
+          SERVER_SOURCE: release-source
         run: |
           mkdir -p _build/release-licenses
           curl --fail --location --retry 3 \

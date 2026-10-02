@@ -1,6 +1,25 @@
 --- a/oct_check.ml
 +++ b/oct_check.ml
-@@ -175,7 +175,16 @@
+@@ -100,11 +100,13 @@
+       | None ->
+         begin
+           match find_const env name with
+-          | Some _ when List.exists (String.equal name) env.active ->
+-            invalid ("constant dependency is cyclic name = " ^ name)
+-          | Some item when item.c_typ = TVoid ->
+-            expr { env with active = name :: env.active } item.c_value
+-          | Some item -> item.c_typ
++          | Some item ->
++            let key, ast = !Oct_form_check.resolve_scope env.ast `Constant name in
++            if List.exists (String.equal key) env.active then
++              invalid ("constant dependency is cyclic name = " ^ name);
++            if item.c_typ = TVoid then
++              expr { env with ast; locals = []; active = key :: env.active } item.c_value
++            else item.c_typ
+           | None ->
+             if List.mem name ["epoch"; "epoch_time"; "value"] then TInt
+             else invalid ("variable is undefined name = " ^ name)
+@@ -175,7 +177,16 @@
        declared
        (expr { env with locals = (name, declared) :: env.locals } body);
      declared
@@ -18,9 +37,22 @@
      invalid "direct form expression requires AML compilation"
  
  and binary env op left right =
+@@ -538,7 +549,8 @@
+   | None -> invalid ("state field is undefined name = " ^ name)
+ 
+ let check_const ast item =
+-  let env = { ast; locals = []; ret = TVoid; active = [item.c_name] } in
++  let key, _ = !Oct_form_check.resolve_scope ast `Constant item.c_name in
++  let env = { ast; locals = []; ret = TVoid; active = [key] } in
+   let actual = expr env item.c_value in
+   if item.c_typ <> TVoid then
+     require "constant type differs" item.c_typ actual
 --- a/oct_form_check.ml
 +++ b/oct_form_check.ml
-@@ -185,8 +185,11 @@
+@@ -182,11 +182,14 @@
+     let* value = bind line column value in
+     binds line column (value :: out) rest
+ 
 +let resolve_scope = ref (fun program (_ : [ `Callable | `Constant ]) name -> name, program)
 +
  let rec build program trail cache name =
@@ -54,35 +86,3 @@
  
  and flow program trail cache env owner =
    let rec unwrap line column = function
---- a/oct_check.ml
-+++ b/oct_check.ml
-@@ -101,11 +101,13 @@
-       | None ->
-         begin
-           match find_const env name with
--          | Some _ when List.exists (String.equal name) env.active ->
--            invalid ("constant dependency is cyclic name = " ^ name)
--          | Some item when item.c_typ = TVoid ->
--            expr { env with active = name :: env.active } item.c_value
--          | Some item -> item.c_typ
-+          | Some item ->
-+            let key, ast = !Oct_form_check.resolve_scope env.ast `Constant name in
-+            if List.exists (String.equal key) env.active then
-+              invalid ("constant dependency is cyclic name = " ^ name);
-+            if item.c_typ = TVoid then
-+              expr { env with ast; locals = []; active = key :: env.active } item.c_value
-+            else item.c_typ
-           | None ->
-             if List.mem name ["epoch"; "epoch_time"; "value"] then TInt
-             else invalid ("variable is undefined name = " ^ name)
-@@ -548,8 +550,9 @@
- 
- let check_const ast item =
--  let env = { ast; locals = []; ret = TVoid; active = [item.c_name] } in
-+  let key, _ = !Oct_form_check.resolve_scope ast `Constant item.c_name in
-+  let env = { ast; locals = []; ret = TVoid; active = [key] } in
-   let actual = expr env item.c_value in
-   if item.c_typ <> TVoid then
-     require "constant type differs" item.c_typ actual
- 
- let check_func ast fn =

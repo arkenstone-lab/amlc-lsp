@@ -11,10 +11,14 @@ the active OPAM switch for an existing server. When the switch already contains
 the compatible `amlc.0.1.0~preview` package but not the server, choose
 **Install with OPAM** in the notification or run **AppliedML: Install Language
 Server with OPAM**. After confirmation, the extension installs only
-`amlc-lsp.0.3.0` from its immutable release commit and reconnects
+`amlc-lsp.0.4.0` from its versioned release tag and reconnects
 automatically. It neither installs nor replaces AMLC.
 
 The installer requires OPAM and AMLC to be available in the same active switch.
+For 0.4.0, install AMLC from the audited `1f24fa97` source commit. Older source
+pins may share the `0.1.0~preview` version but expose an incompatible library
+API. Use the linked manual installation guide to update that pin or an existing
+server; automatic discovery keeps an existing executable.
 It stops with guidance when OPAM is unavailable, AMLC is absent, or the AMLC
 version is incompatible. Set **AppliedML › Opam: Path** if the OPAM executable
 is not named `opam` or is outside Visual Studio Code's `PATH`.

@@ -42,18 +42,8 @@ let source_span source first last =
 (* Oct_* errors provide a point, not a token range. Preserve that distinction;
    callers can convert the byte offset to UTF-16 without guessing an end. *)
 let point source line column =
-  let rec start current offset =
-    if current = line then Some offset
-    else match String.index_from_opt source offset '\n' with
-      | None -> None
-      | Some index -> start (current + 1) (index + 1)
-  in
-  if line < 1 || column < 1 then None else
-  Option.bind (start 1 0) (fun start ->
-    let finish = Option.value ~default:(String.length source)
-        (String.index_from_opt source start '\n') in
-    let offset = start + column - 1 in
-    if offset > finish then None else source_span source offset offset)
+  Option.bind (Compiler_location.point source line column) (fun offset ->
+    source_span source offset offset)
 
 let term_error source (value : C_parse.error) =
   error ?span:(source_span source value.span.first.off value.span.last.off)
@@ -194,7 +184,7 @@ let function_dispatch (ast : Oct_lang.contract) =
        local types need not be reconstructed to distinguish a builtin from a
        user call. No source, diagnostics or argument types are fabricated. *)
     let program, direct = Lazy.force linked in
-    let env = Oct_gen.make_env ast.declaration ast.structs ast.enums ast.consts
+    let env = Oct_gen.make_env Oct_gen.Source ast.declaration ast.structs ast.enums ast.consts
         ast.state ast.events ast.errors program.funcs
         (List.map (fun (form : Oct_lang.form_def) -> form.fm_name) ast.forms) direct in
     List.iteri (fun label (fn : Oct_lang.func_def) ->
@@ -277,7 +267,19 @@ let term source =
               (fn.arr.caps @ [fn.arr.arg]))) (C_parse.forms ast)
         |> term_locations source in
       match C_parse.check ast with
-      | Ok _ -> result ?formatting:(Format_layout.term_lines source) declarations
+      | Ok _ ->
+          let parameters, calls = Term_symbols.index source ast in
+          let declarations = List.map (fun declaration ->
+            if declaration.kind <> "form" || Option.is_none declaration.selection then declaration else
+            let uses = List.filter_map (fun (name, first, last) ->
+              if name = declaration.name then source_span source first last else None) calls in
+            { declaration with uses = List.sort_uniq compare (declaration.uses @ uses) }) declarations in
+          let parameters = List.map (fun (parameter : Term_symbols.parameter) ->
+            { (declaration "parameter" parameter.name) with return_type = parameter.typ;
+              selection = source_span source parameter.first parameter.last;
+              uses = List.filter_map (fun (first, last) -> source_span source first last) parameter.uses })
+            parameters in
+          result ?formatting:(Format_layout.term_lines source) (declarations @ parameters)
       | Error value -> result ~diagnostics:[term_error source value] declarations
 
 let rec type_text = function
@@ -327,6 +329,8 @@ let local_variables ?(record_callable_use = fun _ _ -> ()) ?(record_type_use = f
         binding := { !binding with uses = span :: !binding.uses }
     | _ -> () in
   let record_expression ?(in_form = false) env first last value =
+    Type_uses.expressions source first last value |> List.iter (fun (name, start, finish) ->
+      Option.iter (record_type_use name) (source_span source start finish));
     let outer, locals, forms = Expression_uses.index source first last value in
     forms |> List.iter (fun (name, first, last) ->
       Option.iter (record_callable_use name) (source_span source first last));
@@ -708,6 +712,15 @@ let local_variables ?(record_callable_use = fun _ _ -> ()) ?(record_type_use = f
   List.rev_map (fun binding -> { !binding with uses = List.rev !binding.uses }) !bindings
 
 let callable_declarations source (ast : Oct_lang.contract) =
+  let field_declaration name typ first last uses =
+    { (declaration ~return_type:(type_text typ) "field" name) with
+      selection = source_span source first last;
+      uses = List.filter_map (fun (first, last) -> source_span source first last) uses } in
+  let state_fields = State_symbols.symbols source ast |> List.map (fun (symbol : State_symbols.symbol) ->
+    field_declaration symbol.name symbol.typ symbol.first symbol.last symbol.uses) in
+  let struct_fields = Struct_fields.symbols source ast |> List.map (fun (symbol : Struct_fields.symbol) ->
+    field_declaration symbol.name symbol.typ symbol.first symbol.last symbol.uses) in
+  let declarations =
     (if ast.name = "" then [] else
       [declaration (Oct_lang.declaration_to_string ast.declaration) ast.name]) @
     List.map (fun (kind, (fn : Oct_lang.func_def)) ->
@@ -727,11 +740,8 @@ let callable_declarations source (ast : Oct_lang.contract) =
     |> fun declarations -> declarations @ (Enum_symbols.symbols source ast |> List.map (fun (symbol : Enum_symbols.symbol) ->
       { (declaration ?return_type:symbol.owner (if symbol.owner = None then "enum" else "enumMember") symbol.name) with
         selection = source_span source symbol.first symbol.last;
-        uses = List.filter_map (fun (first, last) -> source_span source first last) symbol.uses }))
-    |> fun declarations -> declarations @ (State_symbols.symbols source ast |> List.map (fun (symbol : State_symbols.symbol) ->
-      { (declaration ~return_type:(type_text symbol.typ) "field" symbol.name) with
-        selection = source_span source symbol.first symbol.last;
-        uses = List.filter_map (fun (first, last) -> source_span source first last) symbol.uses }))
+        uses = List.filter_map (fun (first, last) -> source_span source first last) symbol.uses })) in
+  declarations @ state_fields @ struct_fields
 
 (* Completion candidates are not proof of binding resolution. Without a checked
    original document, never expose their declaration/use ranges to navigation. *)
@@ -801,16 +811,17 @@ let callable ?resolve source =
       (List.map (fun d -> { d with uses = [] }) declarations)
   else
     (* Use upstream's complete compile entry point, including scope resolution
-       and its own exception handling. Do not substitute Lite Node checks. *)
-    let compiled = match resolve with
+       and its own exception handling. Do not substitute Lite Node checks.
+       The official amlc command checks owned documents in Source mode. *)
+    let compiled, origin = match resolve with
       | Some resolve when ast.imports <> [] ->
           let rec unused name =
             if List.exists (fun (item : Oct_lang.import_decl) -> item.imp_path = name) ast.imports
             then unused (name ^ "_") else name in
           let main = unused "[current document]" in
-          Aml_source.compile_multi
-            (fun path -> if path = main then Some source else resolve path) main
-      | _ -> Aml_source.compile source in
+          Aml_source.compile_multi ~syntax:Oct_gen.Source
+            (fun path -> if path = main then Some source else resolve path) main, Some main
+      | _ -> Aml_source.compile ~syntax:Oct_gen.Source source, None in
     match compiled with
     | Ok _ ->
         let calls = Hashtbl.create 16 in
@@ -830,7 +841,10 @@ let callable ?resolve source =
           { d with uses = List.sort_uniq compare
               (d.uses @ Option.value ~default:[] (Hashtbl.find_opt calls d.name)) }) in
         result ~members ~signatures ~formatting:(Format_layout.lines source) (declarations @ imports @ locals)
-    | Error message -> result ~members ~signatures ~diagnostics:[error message]
+    | Error message ->
+        let span = Option.bind (Compiler_location.offset ?origin ~source message)
+            (fun offset -> source_span source offset offset) in
+        result ~members ~signatures ~diagnostics:[error ?span message]
         (List.map (fun d -> { d with uses = [] }) declarations @ completion_only (local_variables source ast declarations))
 
 let analyze ?(syntax = Auto) ?resolve source =

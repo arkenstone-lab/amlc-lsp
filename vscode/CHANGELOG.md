@@ -1,5 +1,15 @@
 # Change Log
 
+## 0.4.0
+
+- Target the amlc-lsp 0.4 release line and install the server from the `v0.4.0`
+  source tag when the required AMLC package is already installed.
+- Expose improved compiler diagnostic locations and same-file symbol tracking
+  for nested storage fields, term parameters and calls, and named types in
+  `equal[Type]`.
+- Keep the existing PATH and OPAM server setup. Prebuilt server downloads for
+  Visual Studio Code are planned separately.
+
 ## 0.3.2
 
 - Finds an existing `amlc-lsp` executable in the active OPAM switch when Visual
