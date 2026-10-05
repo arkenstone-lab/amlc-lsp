@@ -356,7 +356,7 @@ Before publishing 0.4.1:
 4. Attach `appliedml-lsp-0.4.2.vsix` from the `appliedml-vsix` artifact of a
    successful CI run for the tagged source. Inspect the draft's files and
    confirm that its server archives passed tests before publishing the release.
-5. After the server release is public, run CI manually on its tag and require
+5. After the server release is public, rerun its tag-triggered CI and require
    the live download matrix to pass. Publish the VS Code extension to the
    Visual Studio Marketplace and Open VSX, and submit the Zed registry update
    for the released extension revision.

@@ -120,7 +120,7 @@ parser when the grammar changes, rather than for a server-only patch release.
 Live VS Code download checks require a public server release. During release
 preparation, CI reports the selected release as unavailable and defers those
 checks while validating the candidate server archives. After publishing the
-server, run CI manually on its tag and require the live download matrix to pass
+server, rerun the tag-triggered CI and require the live download matrix to pass
 before publishing the editor clients.
 
 To attach the standalone servers used by Zed, run **Publish Zed server assets**
