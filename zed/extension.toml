@@ -1,6 +1,6 @@
 id = "aml"
 name = "AppliedML"
-version = "0.4.0"
+version = "0.4.1"
 schema_version = 1
 authors = ["Christopher Choi <christopher@arkenstone-labs.com>"]
 description = "Applied Meta Language (AppliedML) support through amlc-lsp."

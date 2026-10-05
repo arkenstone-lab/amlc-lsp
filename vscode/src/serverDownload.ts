@@ -6,7 +6,7 @@ import { pipeline } from "node:stream/promises";
 import * as tar from "tar";
 import * as yauzl from "yauzl";
 
-export const downloadedServerVersion = "0.4.0";
+export const downloadedServerVersion = "0.4.1";
 const repository = "arkenstone-lab/amlc-lsp";
 const releaseMetadataUrl = `https://api.github.com/repos/${repository}/releases/tags/v${downloadedServerVersion}`;
 const archiveLimit = 50 * 1024 * 1024;

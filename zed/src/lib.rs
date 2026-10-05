@@ -4,7 +4,7 @@ use zed_extension_api::settings::LspSettings;
 use zed_extension_api::{self as zed, Result};
 
 const GITHUB_REPOSITORY: &str = "arkenstone-lab/amlc-lsp";
-const SERVER_VERSION: &str = "0.4.0";
+const SERVER_VERSION: &str = "0.4.1";
 
 struct AmlExtension {
     cached_server_path: Option<String>,
@@ -165,24 +165,24 @@ mod tests {
     #[test]
     fn selects_unix_archives() {
         let mac = asset_spec(Os::Mac, Architecture::Aarch64).unwrap();
-        assert_eq!(mac.name, "amlc-lsp-v0.4.0-aarch64-apple-darwin.tar.gz");
+        assert_eq!(mac.name, "amlc-lsp-v0.4.1-aarch64-apple-darwin.tar.gz");
         assert_eq!(
             mac.executable,
-            "amlc-lsp-v0.4.0-aarch64-apple-darwin/amlc-lsp"
+            "amlc-lsp-v0.4.1-aarch64-apple-darwin/amlc-lsp"
         );
         assert!(matches!(mac.file_type, DownloadedFileType::GzipTar));
 
         let linux = asset_spec(Os::Linux, Architecture::X8664).unwrap();
         assert_eq!(
             linux.name,
-            "amlc-lsp-v0.4.0-x86_64-unknown-linux-gnu.tar.gz"
+            "amlc-lsp-v0.4.1-x86_64-unknown-linux-gnu.tar.gz"
         );
     }
 
     #[test]
     fn selects_a_windows_zip() {
         let windows = asset_spec(Os::Windows, Architecture::X8664).unwrap();
-        assert_eq!(windows.name, "amlc-lsp-v0.4.0-x86_64-pc-windows-gnu.zip");
+        assert_eq!(windows.name, "amlc-lsp-v0.4.1-x86_64-pc-windows-gnu.zip");
         assert!(windows.executable.ends_with("/amlc-lsp.exe"));
         assert!(matches!(windows.file_type, DownloadedFileType::Zip));
     }

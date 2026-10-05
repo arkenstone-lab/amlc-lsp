@@ -1,5 +1,10 @@
 # Change Log
 
+## 0.4.2
+
+- Download amlc-lsp 0.4.1, built with the updated official AMLC dependency.
+- Target the `v0.4.1` source tag for confirmed OPAM server installation.
+
 ## 0.4.1
 
 - Download and verify the matching prebuilt server when no configured, PATH,

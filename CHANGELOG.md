@@ -1,9 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.4.1
+
+### Compatibility
 
 - Update the audited AMLC dependency to `f3a2924` and the Lite Node regression
   baseline to `a1ead4a`.
+
+- Zed and Neovim target the 0.4.1 server. VS Code extension 0.4.2 downloads
+  this server when no configured, PATH, or OPAM server is available.
 
 ## VS Code extension 0.4.1
 

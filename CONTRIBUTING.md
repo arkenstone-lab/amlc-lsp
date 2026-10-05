@@ -114,6 +114,12 @@ commit, allowing that exact SHA to qualify before tagging. Tags matching `v*`
 repeat the installation through the public tag URL and must match the package
 version. Publish the GitHub release only after those checks pass.
 
+Live VS Code download checks require a public server release. During release
+preparation, CI reports the selected release as unavailable and defers those
+checks while validating the candidate server archives. After publishing the
+server, run CI manually on its tag and require the live download matrix to pass
+before publishing the editor clients.
+
 To attach the standalone servers used by Zed, run **Publish Zed server assets**
 with the existing release tag. The workflow checks out that immutable tag,
 builds and smoke-tests the Linux x86_64/AArch64, macOS Intel/Apple Silicon, and

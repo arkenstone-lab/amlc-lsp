@@ -10,7 +10,7 @@
     }
   ],
   "metadata": {
-    "version": "0.4.0",
+    "version": "0.4.1",
     "license": "BSD-3-Clause",
     "description": "Tree-sitter grammar for Applied Meta Language (AppliedML)",
     "authors": [{ "name": "AMLC LSP Contributors" }]
