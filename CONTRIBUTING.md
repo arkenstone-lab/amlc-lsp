@@ -114,6 +114,9 @@ commit, allowing that exact SHA to qualify before tagging. Tags matching `v*`
 repeat the installation through the public tag URL and must match the package
 version. Publish the GitHub release only after those checks pass.
 
+The Tree-sitter grammar has its own patch version. Update it and regenerate the
+parser when the grammar changes, rather than for a server-only patch release.
+
 Live VS Code download checks require a public server release. During release
 preparation, CI reports the selected release as unavailable and defers those
 checks while validating the candidate server archives. After publishing the
