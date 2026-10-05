@@ -17,7 +17,7 @@ depends: [
 pin-depends: [
   [
     "amlc.0.1.0~preview"
-    "git+https://github.com/octra-labs/amlc.git#1f24fa97ed41a421eec84d52dceff31b0ea5ffbd"
+    "git+https://github.com/octra-labs/amlc.git#f3a292416be62df0d29e6c6eabe5359b34cecc0d"
   ]
 ]
 build: [

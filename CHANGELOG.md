@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Update the audited AMLC dependency to `f3a2924` and the Lite Node regression
+  baseline to `a1ead4a`.
+
 ## VS Code extension 0.4.1
 
 - VS Code can download the versioned prebuilt server when no local server is
