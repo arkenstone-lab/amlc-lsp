@@ -172,7 +172,7 @@ jobs:
         # Installing the local source processes its Git-only AMLC dependency.
         run: opam install . --with-test -y
       - name: Install package from public Git source
-        if: ${{ github.event_name == 'push' }}
+        if: ${{ github.event_name != 'pull_request' }}
         shell: bash
         run: |
           version=$(sed -n 's/^version: "\(.*\)"$/\1/p' amlc-lsp.opam)
