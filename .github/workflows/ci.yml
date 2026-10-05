@@ -5,11 +5,45 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  server-release:
+    name: Published server availability
+    runs-on: ubuntu-latest
+    outputs:
+      public: ${{ steps.release.outputs.public }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the selected server release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version=$(sed -n 's/^export const downloadedServerVersion = "\([^"]*\)";$/\1/p' vscode/src/serverDownload.ts)
+          source_version=$(sed -n 's/^version: "\(.*\)"$/\1/p' amlc-lsp.opam)
+          test -n "$version"
+          test "$version" = "$source_version"
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$version" \
+              > "$RUNNER_TEMP/server-release.json" 2> "$RUNNER_TEMP/server-release.err"; then
+            public=$(jq -r '(.draft == false and .prerelease == false)' "$RUNNER_TEMP/server-release.json")
+          else
+            if ! grep -Fq 'HTTP 404' "$RUNNER_TEMP/server-release.err"; then
+              cat "$RUNNER_TEMP/server-release.err" >&2
+              exit 1
+            fi
+            public=false
+          fi
+          if test "$public" = false; then
+            grep -Fxq "## $version" CHANGELOG.md
+            echo "Live download tests await public release v$version; candidate server builds still run." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "public=$public" >> "$GITHUB_OUTPUT"
+
   vscode-extension:
     name: Visual Studio Code extension (${{ matrix.os }})
     strategy:
@@ -51,6 +85,8 @@ jobs:
 
   vscode-prebuilt-server:
     name: VS Code downloaded server (${{ matrix.os }})
+    needs: server-release
+    if: ${{ needs.server-release.outputs.public == 'true' }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -105,7 +141,7 @@ jobs:
     if: ${{ github.event_name == 'pull_request' }}
     uses: ./.github/workflows/zed-server-assets.yml
     with:
-      release_tag: v0.4.0
+      release_tag: v0.4.1
       source_commit: ${{ github.sha }}
     permissions:
       contents: read
