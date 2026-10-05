@@ -1,7 +1,7 @@
 # Legacy compatibility patches
 
 The default OPAM and Nix packages use the unmodified `amlc.vm` library from
-AMLC commit `1f24fa97ed41a421eec84d52dceff31b0ea5ffbd`. They do not apply either
+AMLC commit `f3a292416be62df0d29e6c6eabe5359b34cecc0d`. They do not apply either
 patch in this directory.
 
 The explicitly selected Nix `legacy` environment applies

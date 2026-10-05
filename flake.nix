@@ -18,12 +18,12 @@
           amlcSrc = pkgs.fetchFromGitHub {
             owner = "octra-labs";
             repo = "amlc";
-            rev = "1f24fa97ed41a421eec84d52dceff31b0ea5ffbd";
-            hash = "sha256-d5fk5KL17DBtq/5OnP+m35kycVQ9LLldnMGwFAG4MIs=";
+            rev = "f3a292416be62df0d29e6c6eabe5359b34cecc0d";
+            hash = "sha256-VLDtnZMZbvDndB0vMpoosrO/HmcG0BVL+ah8P0vivxA=";
           };
           amlc = ocamlPackages.buildDunePackage rec {
             pname = "amlc";
-            version = "0.1.0-preview-1f24fa9";
+            version = "0.1.0-preview-f3a2924";
             src = amlcSrc;
             propagatedBuildInputs = with ocamlPackages; [
               zarith
@@ -48,8 +48,8 @@
           liteNodeSrc = pkgs.fetchFromGitHub {
             owner = "octra-labs";
             repo = "lite_node";
-            rev = "f58b465085d480030aae65775aae49f40709aaac";
-            hash = "sha256-C2+O9EcKVjokHmRWlVWv2QmbIvggODj5k2IHfoZhEZc=";
+            rev = "a1ead4a1181c743bd136c7ddeca5a7ccfa60e430";
+            hash = "sha256-QA4Tmzmfroc3W0adCLlweIm9JhbZ8QK+79MpKTeyVTE=";
           };
           rehovotSrc = pkgs.runCommand "rehovot-check-source" {} ''
             mkdir -p "$out"
@@ -76,7 +76,7 @@
           '';
           rehovotCheck = ocamlPackages.buildDunePackage {
             pname = "rehovot_check";
-            version = "1.0-rehovot-f58b465";
+            version = "1.0-rehovot-a1ead4a";
             src = rehovotSrc;
             propagatedBuildInputs = with ocamlPackages; [ zarith yojson ];
             postInstall = ''

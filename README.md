@@ -72,8 +72,9 @@ opam pin add amlc-lsp.0.4.0 "git+https://github.com/arkenstone-lab/amlc-lsp.git#
 
 Accept the dependent-pin prompt. OPAM then pins the audited, unmodified AMLC
 commit and installs AMLC and amlc-lsp as separate packages in the same switch.
-For 0.4.0, the audited AMLC commit is `1f24fa97`. Older AMLC commits can use
-the same `0.1.0~preview` version string but expose a different library API;
+For 0.4.0, the audited AMLC commit is `1f24fa97`. The current development
+branch uses `f3a2924`. Older AMLC commits can use the same `0.1.0~preview`
+version string but expose a different library API;
 when upgrading, accept the dependent-pin update in this manual installation.
 An unrelated `amlc` executable on PATH cannot satisfy this build-time library
 dependency. Because AMLC is absent from the central repository, 0.4.0 cannot be
