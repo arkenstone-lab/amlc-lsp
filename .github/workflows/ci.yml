@@ -32,14 +32,14 @@ jobs:
               > "$RUNNER_TEMP/server-release.json" 2> "$RUNNER_TEMP/server-release.err"; then
             public=$(jq -r '(.draft == false and .prerelease == false)' "$RUNNER_TEMP/server-release.json")
           else
-            if ! rg -q 'HTTP 404' "$RUNNER_TEMP/server-release.err"; then
+            if ! grep -Fq 'HTTP 404' "$RUNNER_TEMP/server-release.err"; then
               cat "$RUNNER_TEMP/server-release.err" >&2
               exit 1
             fi
             public=false
           fi
           if test "$public" = false; then
-            rg -q "^## $version$" CHANGELOG.md
+            grep -Fxq "## $version" CHANGELOG.md
             echo "Live download tests await public release v$version; candidate server builds still run." >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "public=$public" >> "$GITHUB_OUTPUT"
