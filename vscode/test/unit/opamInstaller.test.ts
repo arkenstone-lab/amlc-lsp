@@ -73,8 +73,8 @@ test("installs only the LSP when the required AMLC is present", async () => {
     "add",
     "--yes",
     "--ignore-pin-depends",
-    "amlc-lsp.0.4.1",
-    "git+https://github.com/arkenstone-lab/amlc-lsp.git#v0.4.1",
+    "amlc-lsp.0.4.2",
+    "git+https://github.com/arkenstone-lab/amlc-lsp.git#v0.4.2",
   ]);
 });
 

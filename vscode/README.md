@@ -6,9 +6,9 @@ and exposes the diagnostics and language features advertised by the server.
 
 ## Server setup
 
-Starting with extension 0.4.1, the client prefers `amlcLsp.server.path`, then `amlc-lsp` on
+Starting with extension 0.4.3, the client prefers `amlcLsp.server.path`, then `amlc-lsp` on
 PATH or in the active OPAM switch. When none is available, it downloads the
-matching 0.4.1 server from the official GitHub release. The archive includes the
+matching 0.4.2 server from the official GitHub release. The archive includes the
 compiler-linked server, GMP, corresponding source and license notices, so no
 OCaml, OPAM or separate AMLC installation is required. Downloads are SHA-256
 verified, bounded, and cached by version and platform in VS Code's extension
@@ -23,11 +23,11 @@ rather than silently replaced; existing local servers require manual upgrades.
 
 For an OPAM-based setup, run **AppliedML: Install Language Server with OPAM**.
 After confirmation, the extension installs only
-`amlc-lsp.0.4.1` from its versioned release tag and reconnects
+`amlc-lsp.0.4.2` from its versioned release tag and reconnects
 automatically. It neither installs nor replaces AMLC.
 
 The installer requires OPAM and AMLC to be available in the same active switch.
-For 0.4.1, install AMLC from the audited `f3a2924` source commit. Older source
+For 0.4.2, install AMLC from the audited `3a183bc` source commit. Older source
 pins may share the `0.1.0~preview` version but expose an incompatible library
 API. Use the linked manual installation guide to update that pin or an existing
 server; automatic discovery keeps an existing executable.

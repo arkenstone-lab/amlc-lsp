@@ -335,10 +335,10 @@ let () =
     "each branch resolves its own declaration";
   let branch_shadow = analyze "program P { fn run(n: int): int { if n > 0 { return n } else { let n = 2 return n } return n } }" in
   require (branch_shadow.diagnostics = []) "branch shadow fixture";
-  require (List.exists (fun d -> d.kind = "parameter" && List.length d.uses = 1) branch_shadow.declarations)
-    "only the controlling expression resolves to the shadowed outer parameter";
+  require (List.exists (fun d -> d.kind = "parameter" && List.length d.uses = 3) branch_shadow.declarations)
+    "outer parameter resumes after a shadowing branch";
   require (List.exists (fun d -> d.kind = "local" && List.length d.uses = 1) branch_shadow.declarations)
-    "sibling and post-branch uses must not navigate to a branch-local declaration";
+    "branch-local navigation stays in its own body";
   let fibonacci_source = "program Fib { public fn fib(n: int): int { let a = 0 let b = 1 let i = 0 while i < n { let t = a + b a = b b = t i = i + 1 } return a } }" in
   let fibonacci = analyze fibonacci_source in
   require (fibonacci.diagnostics = []) "official Fibonacci while fixture";
@@ -355,8 +355,8 @@ let () =
   require (shadow_while.diagnostics = []) "while shadow fixture";
   require (List.exists (fun d -> d.kind = "local" && List.length d.uses = 1) shadow_while.declarations)
     "body return resolves to while-local binding";
-  require (List.exists (fun d -> d.kind = "parameter" && d.uses = []) shadow_while.declarations)
-    "ambiguous post-while return does not select the outer parameter";
+  require (List.exists (fun d -> d.kind = "parameter" && List.length d.uses = 2) shadow_while.declarations)
+    "outer parameter resumes after the while body";
   let match_source = "program P { enum Mode { A, B } fn run(mode: Mode, n: int): int { match mode { Mode.A => { let x = 1 return x } Mode.B => return n } return n } }" in
   let matched = analyze match_source in
   require (matched.diagnostics = []) "block and single-statement match fixture";
@@ -367,10 +367,15 @@ let () =
     "match arm return resolves to arm-local declaration";
   let match_shadow = analyze "program P { enum Mode { A, B } fn run(mode: Mode, n: int): int { match mode { Mode.A => { let n = 1 return n } Mode.B => return n } return n } }" in
   require (match_shadow.diagnostics = []) "match shadow fixture";
-  require (List.exists (fun d -> d.kind = "parameter" && d.name = "n" && d.uses = []) match_shadow.declarations)
-    "later match arms must not resolve leaked bindings to the outer parameter";
+  require (List.exists (fun d -> d.kind = "parameter" && d.name = "n" && List.length d.uses = 2) match_shadow.declarations)
+    "outer parameter remains visible in sibling arms and after the match";
   require (List.exists (fun d -> d.kind = "local" && List.length d.uses = 1) match_shadow.declarations)
     "match-local navigation stays in its own arm";
+  let immutable_loop = analyze "program P { public pure fn run(): int { for i in 0..1 { i = 0 } return 0 } }" in
+  require (List.length immutable_loop.diagnostics = 1) "pure loop index assignment is rejected";
+  require (match List.hd immutable_loop.diagnostics with
+    | { message; span = Some _ } -> String.starts_with ~prefix:"line 1 column " message
+    | _ -> false) "pure loop diagnostic has a compiler location";
   let restored_branch = analyze "program P { fn run(n: int): int { for i in 0..2 { if i > 0 { let n = 2 return n } } return n } }" in
   require (restored_branch.diagnostics = []) "branch inside restoring loop fixture";
   require (List.exists (fun d -> d.kind = "parameter" && d.name = "n"

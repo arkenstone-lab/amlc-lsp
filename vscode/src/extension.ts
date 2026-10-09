@@ -305,7 +305,7 @@ async function runServerInstallation(
   }
 
   const confirmation = await vscode.window.showInformationMessage(
-    "Install amlc-lsp 0.4.1 from its audited GitHub release into the active " +
+    "Install amlc-lsp 0.4.2 from its audited GitHub release into the active " +
       "OPAM switch? The existing AMLC package will not be installed or replaced.",
     { modal: true },
     "Install",

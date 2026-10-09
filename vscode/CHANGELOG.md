@@ -1,5 +1,10 @@
 # Change Log
 
+## 0.4.3
+
+- Download amlc-lsp 0.4.2, including the latest AMLC scope fixes.
+- Target the `v0.4.2` source tag for confirmed OPAM server installation.
+
 ## 0.4.2
 
 - Download amlc-lsp 0.4.1, built with the updated official AMLC dependency.

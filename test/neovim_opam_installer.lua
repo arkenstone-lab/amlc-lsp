@@ -54,8 +54,8 @@ assert(calls[3] == table.concat({
   "add",
   "--yes",
   "--ignore-pin-depends",
-  "amlc-lsp.0.4.1",
-  "git+https://github.com/arkenstone-lab/amlc-lsp.git#v0.4.1",
+  "amlc-lsp.0.4.2",
+  "git+https://github.com/arkenstone-lab/amlc-lsp.git#v0.4.2",
 }, " "), "installer pin command changed")
 assert(calls[4] == "var bin", "installed server was not located")
 assert(enabled[#enabled - 1] == false and enabled[#enabled] == true, "LSP was not restarted")

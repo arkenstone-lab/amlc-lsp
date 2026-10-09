@@ -24,7 +24,7 @@ test("selects all five release platforms and rejects unsupported targets", () =>
     ["win32", "x64", "x86_64-pc-windows-gnu"],
   ]) {
     const spec = serverAsset(platform, arch);
-    assert.ok(spec.name.includes(`v0.4.1-${target}`));
+    assert.ok(spec.name.includes(`v0.4.2-${target}`));
     assert.equal(spec.format, platform === "win32" ? "zip" : "tar.gz");
   }
   assert.throws(() => serverAsset("win32", "arm64"), /No prebuilt/);
@@ -52,7 +52,7 @@ test("restricts URLs to GitHub HTTPS hosts, including redirects", () => {
 
 test("optional credentials are restricted to the pinned release metadata", () => {
   const metadata = new URL(
-    "https://api.github.com/repos/arkenstone-lab/amlc-lsp/releases/tags/v0.4.1",
+    "https://api.github.com/repos/arkenstone-lab/amlc-lsp/releases/tags/v0.4.2",
   );
   assert.equal(
     githubRequestHeaders(metadata, "test-token").Authorization,
@@ -60,11 +60,11 @@ test("optional credentials are restricted to the pinned release metadata", () =>
   );
   assert.equal(githubRequestHeaders(metadata, "").Authorization, undefined);
   for (const value of [
-    "https://github.com/arkenstone-lab/amlc-lsp/releases/download/v0.4.1/server.tar.gz",
+    "https://github.com/arkenstone-lab/amlc-lsp/releases/download/v0.4.2/server.tar.gz",
     "https://release-assets.githubusercontent.com/archive",
     "https://objects.githubusercontent.com/archive",
-    "https://api.github.com/repos/other/repository/releases/tags/v0.4.1",
-    "https://api.github.com/repos/arkenstone-lab/amlc-lsp/releases/tags/v0.4.1?redirected=1",
+    "https://api.github.com/repos/other/repository/releases/tags/v0.4.2",
+    "https://api.github.com/repos/arkenstone-lab/amlc-lsp/releases/tags/v0.4.2?redirected=1",
   ]) {
     assert.equal(
       githubRequestHeaders(new URL(value), "test-token").Authorization,
@@ -109,7 +109,7 @@ function fixture(overrides: Record<string, unknown> = {}) {
     name: spec.name,
     size: bytes.length,
     digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
-    browser_download_url: `https://github.com/arkenstone-lab/amlc-lsp/releases/download/v0.4.1/${spec.name}`,
+    browser_download_url: `https://github.com/arkenstone-lab/amlc-lsp/releases/download/v0.4.2/${spec.name}`,
     ...overrides,
   };
   let downloads = 0;
@@ -119,7 +119,7 @@ function fixture(overrides: Record<string, unknown> = {}) {
       return url.includes("api.github.com")
         ? Buffer.from(
             JSON.stringify({
-              tag_name: "v0.4.1",
+              tag_name: "v0.4.2",
               draft: false,
               assets: [asset],
             }),
@@ -242,7 +242,7 @@ test("cache is version-specific", () =>
     const marker = JSON.parse(
       await fs.readFile(path.join(directory, ".installed.json"), "utf8"),
     );
-    assert.equal(marker.version, "0.4.1");
+    assert.equal(marker.version, "0.4.2");
   }));
 
 test("extracts real tar files and rejects symlinks before writing", () =>
