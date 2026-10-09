@@ -924,9 +924,13 @@ def main():
                         "start": {"line": line, "character": start},
                         "end": {"line": line, "character": start + 1}}}], targets
                 else:
-                    assert targets == [], "post-while use selected an ambiguous binding"
+                    start = shadow_lines[0].index("n: int")
+                    assert targets == [{"uri": shadow_uri, "range": {
+                        "start": {"line": 0, "character": start},
+                        "end": {"line": 0, "character": start + 1}}}], targets
                     send("textDocument/completion", query, 2206)
-                    assert not any(item["label"] == "n" for item in response(2206)["result"]["items"])
+                    assert any(item["label"] == "n" and item["detail"] == "n: int"
+                               for item in response(2206)["result"]["items"])
 
             branch_lines = ["/* 😀 */ program P { fn run(n: int): int {",
                             "if n > 0 { let x = 1 return x }",
@@ -980,9 +984,13 @@ def main():
                 query = {"textDocument": {"uri": uri}, "position": {
                     "line": 0, "character": text.rindex("return n") + len("return ")}}
                 send("textDocument/definition", query, 2230 + index)
-                assert response(2230 + index)["result"] == [], "ambiguous post-branch binding was indexed"
+                parameter = text.index("n: int")
+                assert response(2230 + index)["result"] == [{"uri": uri, "range": {
+                    "start": {"line": 0, "character": parameter},
+                    "end": {"line": 0, "character": parameter + 1}}}]
                 send("textDocument/completion", query, 2232 + index)
-                assert not any(item["label"] == "n" for item in response(2232 + index)["result"]["items"])
+                assert any(item["label"] == "n" and item["detail"] == "n: int"
+                           for item in response(2232 + index)["result"]["items"])
                 # The controlling expression is emitted before branch locals.
                 query["position"]["character"] = text.index(body) + (3 if index == 0 else 6)
                 send("textDocument/completion", query, 2234 + index)
@@ -1333,6 +1341,12 @@ def main():
             assert items[0]["range"] == {"start": point, "end": point}, items
             send("textDocument/diagnostic", {"textDocument": {"uri": bad_uri}}, 4)
             assert response(4)["result"]["items"] == items
+
+            pure_loop = "program P { public pure fn run(): int { for i in 0..1 { i = 0 } return 0 } }"
+            _, items = open_document("pure-loop-index.aml", pure_loop)
+            pure_point = {"line": 0, "character": pure_loop.index("i = 0")}
+            assert len(items) == 1 and "pure loop index is immutable = i" in items[0]["message"], items
+            assert items[0]["range"] == {"start": pure_point, "end": pure_point}, items
 
             send("textDocument/didChange", {"textDocument": {"uri": bad_uri, "version": 2},
                  "contentChanges": [{"text": source}]})

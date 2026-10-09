@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.2
+
+### Fixed
+
+- Restore lexical local-variable navigation and completion after `if`, `while`,
+  and `match` blocks now that AMLC restores those scopes during compilation.
+
+### Compatibility
+
+- Audit AMLC commit `3a183bc` and Lite Node commit `7264d6d`. The existing
+  Rehovot regression patch applies unchanged to the new Lite Node source.
+
+- Zed and Neovim target the 0.4.2 server. VS Code extension 0.4.3 downloads
+  this server when no configured, PATH, or OPAM server is available.
+
+## VS Code extension 0.4.3
+
+- Target the 0.4.2 server for automatic downloads and confirmed OPAM
+  installation.
+
 ## 0.4.1
 
 ### Compatibility
@@ -10,7 +30,7 @@
 - Zed and Neovim target the 0.4.1 server. VS Code extension 0.4.2 downloads
   this server when no configured, PATH, or OPAM server is available.
 
-## VS Code extension 0.4.1
+## VS Code extension 0.4.2
 
 - VS Code can download the versioned prebuilt server when no local server is
   available, with checksum verification and an opt-out setting.

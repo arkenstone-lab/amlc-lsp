@@ -8,7 +8,7 @@ if [ "${AMLC_LSP_LEGACY_TOOLS:-}" != "1" ]; then
 fi
 : "${PREFIX:?Set PREFIX to a dedicated legacy test installation directory}"
 
-revision=a1ead4a1181c743bd136c7ddeca5a7ccfa60e430
+revision=7264d6d016091358fae071c332a0c6aeeb90f2e4
 prefix=$PREFIX
 workdir=$(mktemp -d "${TMPDIR:-/tmp}/rehovot-check.XXXXXX")
 

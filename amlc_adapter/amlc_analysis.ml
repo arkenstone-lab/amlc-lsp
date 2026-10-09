@@ -289,10 +289,9 @@ let rec type_text = function
   | Oct_lang.TTuple types -> "(" ^ String.concat ", " (List.map type_text types) ^ ")"
   | typ -> Oct_lang.typ_to_string typ
 
-(* For loops restore locals in both upstream stages. While bodies can be
-   indexed in order, but their declarations must block ambiguous outer bindings:
-   codegen retains them and emits the condition after the body. If/match emit
-   their controlling expression first, but also retain branch-local bindings. *)
+(* Upstream restores branch and while scopes. For loops have always restored
+   their iterators, so editor visibility follows lexical block boundaries in
+   every control-flow construct. *)
 let without_scope source first last visibility =
   List.concat_map (fun span ->
     if last <= span.first || first >= span.last then [span] else
@@ -464,17 +463,6 @@ let local_variables ?(record_callable_use = fun _ _ -> ()) ?(record_type_use = f
       let first = stream.lx.pos in
       ignore (Oct_parse.parse_block stream);
       first, stream.lx.pos - 1) (point source line column) in
-  let rec retained_names = function
-    | Oct_lang.SLocated (_, _, value) -> retained_names value
-    | Oct_lang.SLet (name, _, _) -> [name]
-    | Oct_lang.SLetTuple (names, _) -> names
-    | Oct_lang.SWhile (_, body) -> List.concat_map retained_names body
-    | Oct_lang.SIf (_, yes, no) -> List.concat_map retained_names
-        (yes @ Option.value ~default:[] no)
-    | Oct_lang.SMatch (_, arms) -> List.concat_map (fun (_, _, body) ->
-        List.concat_map retained_names body) arms
-    (* For bodies restore the incoming environment, including nested whiles. *)
-    | _ -> [] in
   let rec statement finish env = function
     | Oct_lang.SLocated (line, column, Oct_lang.SLet (name, typ, _)) ->
         record_initializer env line column;
@@ -534,54 +522,46 @@ let local_variables ?(record_callable_use = fun _ _ -> ()) ?(record_type_use = f
         let typ = Option.bind (List.find_opt (fun (f : Oct_lang.state_field) -> f.sf_name = field) ast.state)
           (fun f -> match f.sf_typ with Oct_lang.TList typ -> Some typ | _ -> None) in
         loop line column env name (Some field) typ body
-    | Oct_lang.SLocated (line, column, Oct_lang.SWhile (_, body)) ->
-        let names = List.sort_uniq String.compare (List.concat_map retained_names body) in
-        let start = Option.map (fun span -> span.first) (point source line column) in
-        List.iter (fun name -> hide_binding env name start finish) names;
-        let blocked = block_names names env in
+    | Oct_lang.SLocated (line, column, Oct_lang.SWhile _) ->
         Option.iter (fun start ->
           let stream = stream_at start in
           Oct_lex.expect stream Oct_lang.TkWhile;
-          expression blocked stream;
-          ignore (Oct_parse.parse_block stream);
-          ignore (List.fold_left (statement (Some (stream.lx.pos - 1))) blocked body)) start;
-        blocked
-    | Oct_lang.SLocated (line, column, (Oct_lang.SIf _ as value)) ->
-        let names = List.sort_uniq String.compare (retained_names value) in
-        let blocked = block_names names env in
+          expression env stream;
+          let parsed = Oct_parse.parse_block stream in
+          ignore (List.fold_left (statement (Some (stream.lx.pos - 1))) env parsed))
+          (Option.map (fun span -> span.first) (point source line column));
+        env
+    | Oct_lang.SLocated (line, column, Oct_lang.SIf _) ->
         Option.iter (fun start ->
           let stream = stream_at start.first in
           Oct_lex.expect stream Oct_lang.TkIf;
           expression env stream;
           ignore (Oct_lex.peek_token stream);
-          (* The condition is emitted before either branch. From the body
-             onward, neither sibling declarations nor their leaked codegen
-             bindings may be mistaken for an outer declaration. *)
-          List.iter (fun name -> hide_binding env name (Some stream.lx.pos) finish) names;
           let body = Oct_parse.parse_block stream in
-          ignore (List.fold_left (statement (Some (stream.lx.pos - 1))) blocked body);
+          ignore (List.fold_left (statement (Some (stream.lx.pos - 1))) env body);
           Oct_parse.skip_stmt_end stream;
           if Oct_lex.peek_token stream = Oct_lang.TkElse then begin
             Oct_lex.eat stream;
             if Oct_lex.peek_token stream = Oct_lang.TkIf then
               (* parse_stmt supplies the location omitted by parse_if's
                  nested else-if AST node. *)
-              ignore (statement finish blocked (Oct_parse.parse_stmt stream))
+              let nested = Oct_parse.parse_stmt stream in
+              let nested_finish = match nested with
+                | Oct_lang.SLocated (line, column, _) -> statement_end line column
+                | _ -> finish in
+              ignore (statement nested_finish env nested)
             else begin
               let body = Oct_parse.parse_block stream in
-              ignore (List.fold_left (statement (Some (stream.lx.pos - 1))) blocked body)
+              ignore (List.fold_left (statement (Some (stream.lx.pos - 1))) env body)
             end
           end) (point source line column);
-        blocked
-    | Oct_lang.SLocated (line, column, (Oct_lang.SMatch _ as value)) ->
-        let names = List.sort_uniq String.compare (retained_names value) in
-        let blocked = block_names names env in
+        env
+    | Oct_lang.SLocated (line, column, Oct_lang.SMatch _) ->
         Option.iter (fun start ->
           let stream = stream_at start.first in
           Oct_lex.expect stream Oct_lang.TkMatch;
           expression env stream;
           Oct_lex.expect stream Oct_lang.TkLBrace;
-          List.iter (fun name -> hide_binding env name (Some stream.lx.pos) finish) names;
           let rec arms () =
             Oct_parse.skip_stmt_end stream;
             if Oct_lex.peek_token stream <> Oct_lang.TkRBrace then begin
@@ -597,11 +577,11 @@ let local_variables ?(record_callable_use = fun _ _ -> ()) ?(record_type_use = f
                   ignore (Oct_lex.peek_token stream);
                   [body], Option.map (fun span -> span.first)
                     (point source (Oct_lex.current_line stream) (Oct_lex.current_column stream)) in
-              ignore (List.fold_left (statement last) blocked body);
+              ignore (List.fold_left (statement last) env body);
               arms ()
             end in
           arms ()) (point source line column);
-        blocked
+        env
     | Oct_lang.SLocated (line, column, value) ->
         let values = match value with
           | Oct_lang.SAssert value | Oct_lang.SExpr value

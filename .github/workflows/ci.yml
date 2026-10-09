@@ -141,7 +141,7 @@ jobs:
     if: ${{ github.event_name == 'pull_request' }}
     uses: ./.github/workflows/zed-server-assets.yml
     with:
-      release_tag: v0.4.1
+      release_tag: v0.4.2
       source_commit: ${{ github.sha }}
     permissions:
       contents: read

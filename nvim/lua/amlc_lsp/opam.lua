@@ -1,8 +1,8 @@
 local M = {}
 
 local required_amlc_version = "0.1.0~preview"
-local server_package = "amlc-lsp.0.4.1"
-local server_source = "git+https://github.com/arkenstone-lab/amlc-lsp.git#v0.4.1"
+local server_package = "amlc-lsp.0.4.2"
+local server_source = "git+https://github.com/arkenstone-lab/amlc-lsp.git#v0.4.2"
 
 local installing = false
 
@@ -100,7 +100,7 @@ end
 
 local function confirm_install()
   vim.ui.select({ "Install", "Cancel" }, {
-    prompt = "Install amlc-lsp 0.4.1 in the active OPAM switch? AMLC will not be changed.",
+    prompt = "Install amlc-lsp 0.4.2 in the active OPAM switch? AMLC will not be changed.",
   }, function(choice)
     if choice ~= "Install" then
       installing = false
@@ -119,7 +119,7 @@ local function check_amlc()
       finish_with_error("AMLC is not installed in the active OPAM switch")
     elseif version ~= required_amlc_version then
       finish_with_error(
-        "The active OPAM switch contains amlc " .. version .. "; amlc-lsp 0.4.1 requires " .. required_amlc_version
+        "The active OPAM switch contains amlc " .. version .. "; amlc-lsp 0.4.2 requires " .. required_amlc_version
       )
     else
       confirm_install()

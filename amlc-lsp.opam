@@ -1,5 +1,5 @@
 opam-version: "2.0"
-version: "0.4.1"
+version: "0.4.2"
 synopsis: "Language server for Applied Meta Language (AppliedML)"
 description: "Compiler-backed diagnostics and editor assistance for Octra's AppliedML."
 maintainer: "Christopher Choi <christopher@arkenstone-labs.com>"
@@ -17,7 +17,7 @@ depends: [
 pin-depends: [
   [
     "amlc.0.1.0~preview"
-    "git+https://github.com/octra-labs/amlc.git#f3a292416be62df0d29e6c6eabe5359b34cecc0d"
+    "git+https://github.com/octra-labs/amlc.git#3a183bc8892b1795f2e1059848f1f331ce1a3a51"
   ]
 ]
 build: [

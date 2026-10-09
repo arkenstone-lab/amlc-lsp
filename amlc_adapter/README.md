@@ -41,7 +41,7 @@ build links GMP from its build environment. A standalone editor download must
 separately verify native library availability on a clean target system; do not
 ship this development binary as a self-contained editor release asset.
 
-The currently audited upstream package (`0.1.0~preview`, commit `f3a2924`)
+The currently audited upstream package (`0.1.0~preview`, commit `3a183bc`)
 requires OCaml 4.14.2 in its OPAM definition. It is not currently registered
 in the public OPAM repository; install its official source into an isolated
 switch before running these tests. Alternatively, the default Nix shell now

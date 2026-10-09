@@ -63,9 +63,9 @@ export async function runPrebuiltTest(): Promise<void> {
       const current = api.getServerStatus();
       return current.serverVersion ? current : undefined;
     }, "prebuilt server connection");
-    assert.equal(status.serverVersion, "0.4.1");
+    assert.equal(status.serverVersion, "0.4.2");
     assert.equal(status.compatible, true);
-    assert.ok(status.command.includes("amlc-lsp-v0.4.1-"));
+    assert.ok(status.command.includes("amlc-lsp-v0.4.2-"));
     const position = new vscode.Position(2, 25);
     const completion =
       await vscode.commands.executeCommand<vscode.CompletionList>(
@@ -115,7 +115,7 @@ export async function runPrebuiltTest(): Promise<void> {
     const before = (await fs.stat(executable)).mtimeMs;
     await vscode.commands.executeCommand("appliedml.restartServer");
     assert.equal(api.getServerStatus().command, executable);
-    assert.equal(api.getServerStatus().serverVersion, "0.4.1");
+    assert.equal(api.getServerStatus().serverVersion, "0.4.2");
     assert.equal((await fs.stat(executable)).mtimeMs, before);
     console.log(
       "PREBUILT SERVER PASS: no PATH/OPAM/AMLC; completion, definition, hover, diagnostics, cache restart",

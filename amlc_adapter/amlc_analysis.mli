@@ -32,9 +32,9 @@ type declaration = {
     colon-bound form parameters and direct calls when the term lexer agrees.
     [visibility] bounds parameter completion to the body and local completion
     after initialization, ending at shadowing or the function's closing brace.
-    Disjoint intervals restore an outer binding after a [for] body. A scoped
-    binding shadowed by [if]/[while]/[match] is suppressed where upstream's
-    scope and codegen stages disagree; branch locals stay within their bodies.
+    Disjoint intervals restore an outer binding after a lexical block, including
+    [for], [if], [while], and [match] bodies. Branch locals stay within their
+    own bodies.
     A scoped symbol without any intervals is not a completion candidate. This is
     not a complete reference/rename index. Unchecked/recovered scoped candidates
     have no selection or uses and must be used only for completion. Recovery

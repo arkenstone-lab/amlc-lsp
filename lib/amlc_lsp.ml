@@ -1220,7 +1220,7 @@ let initialize_result = `Assoc [
       ("supported", `Bool true); ("changeNotifications", `Bool true);
     ]) ]);
   ]);
-  ("serverInfo", `Assoc [ ("name", `String "amlc-lsp"); ("version", `String "0.4.1") ]);
+  ("serverInfo", `Assoc [ ("name", `String "amlc-lsp"); ("version", `String "0.4.2") ]);
 ]
 
 let library_methods = [

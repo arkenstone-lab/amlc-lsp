@@ -4,7 +4,7 @@
 
 The default LSP links against the unmodified `amlc.vm` library from the separate
 AMLC dependency. OPAM declares that dependency; Nix builds the official source
-at commit `f3a292416be62df0d29e6c6eabe5359b34cecc0d` without patches. The LSP
+at commit `3a183bc8892b1795f2e1059848f1f331ce1a3a51` without patches. The LSP
 package does not install a private AMLC executable or `rehovot-check` helper.
 Native linking can include AMLC code in the LSP binary, so its notice is retained.
 
@@ -148,7 +148,7 @@ SOFTWARE.
 ## Octra Lite Node compiler components
 
 `rehovot-check` reuses compiler components from Octra Labs' Lite Node commit
-`a1ead4a1181c743bd136c7ddeca5a7ccfa60e430`: the language model, lexer, parser,
+`7264d6d016091358fae071c332a0c6aeeb90f2e4`: the language model, lexer, parser,
 scope resolver, type checker, form checker, verifier, AML core/checking modules,
 and runtime limits. These components are covered by the Octra Labs BSD
 3-Clause notice reproduced above; the helper is not an independently authored
